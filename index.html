@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BuildOrBust</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-wrap">
+          <div class="brand-mark">B</div>
+          <div>
+            <p class="eyebrow">Challenge Lab</p>
+            <h1>BuildOrBust</h1>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item active">Overview</button>
+          <button class="nav-item">Challenges</button>
+          <button class="nav-item">Progress</button>
+          <button class="nav-item">Leaderboard</button>
+        </nav>
+
+        <div class="mini-panel">
+          <p class="eyebrow">Current streak</p>
+          <h2 id="streakCount">12 days</h2>
+          <div class="progress-trail">
+            <div class="progress-fill" id="streakProgress"></div>
+          </div>
+          <small id="streakMeta">8/10 days to elite streak</small>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Tuesday, August 26</p>
+            <h2>Keep your momentum alive</h2>
+          </div>
+          <button class="primary-btn">Log win</button>
+        </header>
+
+        <section class="hero-card">
+          <div>
+            <p class="eyebrow accent">Today’s target</p>
+            <h3>Finish 2 strength sessions and 1 recovery block</h3>
+          </div>
+          <div class="hero-stats">
+            <div>
+              <span>XP</span>
+              <strong id="xpValue">640</strong>
+            </div>
+            <div>
+              <span>Energy</span>
+              <strong id="energyValue">82%</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Daily challenges</h3>
+              <span class="tag">3 active</span>
+            </div>
+            <div id="challengeList" class="card-list"></div>
+          </div>
+
+          <div class="panel side-panel">
+            <div class="panel-header">
+              <h3>Quick actions</h3>
+            </div>
+            <div class="action-list">
+              <button class="action-card" data-action="workout">
+                <span>💪</span>
+                <div>
+                  <strong>Workout</strong>
+                  <small>+120 XP</small>
+                </div>
+              </button>
+              <button class="action-card" data-action="walk">
+                <span>🚶</span>
+                <div>
+                  <strong>Walk</strong>
+                  <small>+60 XP</small>
+                </div>
+              </button>
+              <button class="action-card" data-action="hydrate">
+                <span>💧</span>
+                <div>
+                  <strong>Hydrate</strong>
+                  <small>+15 XP</small>
+                </div>
+              </button>
+            </div>
+
+            <div class="leaderboard">
+              <div class="panel-header compact">
+                <h3>Top builders</h3>
+              </div>
+              <ul id="leaderboardList"></ul>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
