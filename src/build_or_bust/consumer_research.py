@@ -200,7 +200,8 @@ class YouMCPClient:
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]):
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        async with httpx2.AsyncClient(headers=headers) as http_client:
+        timeout = httpx2.Timeout(connect=30, read=300, write=30, pool=30)
+        async with httpx2.AsyncClient(headers=headers, timeout=timeout) as http_client:
             transport = streamable_http_client(self.url, http_client=http_client)
             async with Client(transport) as client:
                 tools = await client.list_tools()
@@ -209,7 +210,11 @@ class YouMCPClient:
                 result = await client.call_tool(name, arguments)
 
         if result.is_error:
-            raise ResearchFailure(f"The You.com {name} MCP tool returned an error.")
+            detail = "".join(
+                block.text for block in result.content if hasattr(block, "text")
+            ).strip()
+            suffix = f": {detail[:1000]}" if detail else "."
+            raise ResearchFailure(f"The You.com {name} MCP tool returned an error{suffix}")
         return result
 
     @staticmethod

@@ -8,7 +8,7 @@ from langgraph.types import Command
 from .graph import open_graph
 
 
-def _show_sources(sources: list[dict[str, str]], limit: int = 10) -> None:
+def _show_sources(sources: list[dict], limit: int = 10) -> None:
     for source in sources[:limit]:
         print(f"    - {source['title']}: {source['url']}")
     remaining = len(sources) - limit
@@ -21,6 +21,14 @@ def _show(result: dict) -> None:
         print(result["__interrupt__"][0].value["question"])
     elif result.get("status") == "error":
         print(f"Error [{result.get('error_code')}]: {result.get('error_message')}")
+    elif result.get("status") == "insufficient_evidence":
+        assessment = result["evidence_assessment"]
+        print("INSUFFICIENT_EVIDENCE: research did not meet the evidence gate.")
+        print(f"  Valid sources: {assessment['source_counts']}")
+        print(f"  Independent domains: {assessment['independent_domain_counts']}")
+        print("  Failed checks:")
+        for check in assessment["failed_checks"]:
+            print(f"    - {check}")
     else:
         print("Intake complete:")
         fields = ("product_idea", "target_customer", "geography", "problem", "product_type")
@@ -84,6 +92,11 @@ def _show(result: dict) -> None:
                         print(f"    - {item}")
             print("  Sources:")
             _show_sources(result.get("market_feasibility_sources", []))
+        assessment = result.get("evidence_assessment")
+        if assessment:
+            print("\nEvidence gate: PASSED")
+            print(f"  Valid sources: {assessment['source_counts']}")
+            print(f"  Independent domains: {assessment['independent_domain_counts']}")
         assumptions = result.get("assumption_analysis")
         if assumptions:
             print("\nAssumption Killer:")
@@ -114,11 +127,28 @@ def _show(result: dict) -> None:
                     print(f"  {label}:")
                     for item in assumptions[key]:
                         print(f"    - {item}")
+        judgment = result.get("judgment")
+        if judgment:
+            print("\nJudge:")
+            print(f"  Decision: {judgment['decision']}")
+            print(f"  Confidence: {judgment['confidence']:.0%}")
+            print(f"  Reasoning: {judgment['reasoning']}")
+            print("  Decisive evidence:")
+            for item in judgment["decisive_evidence"]:
+                print(f"    - {item}")
+            if judgment["blocking_uncertainties"]:
+                print("  Blocking uncertainties:")
+                for item in judgment["blocking_uncertainties"]:
+                    print(f"    - {item}")
+            print("  Decision criteria:")
+            for criterion in judgment["decision_criteria"]:
+                print(f"    - [{criterion['status'].upper()}] {criterion['criterion']}")
+                print(f"      Evidence: {criterion['evidence']}")
 
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–5")
+    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–6")
     parser.add_argument("idea", nargs="?", help="Product idea to normalize")
     parser.add_argument("--thread", default=str(uuid.uuid4()), help="Persistent run ID")
     parser.add_argument("--resume", help="Answer a saved clarification question")

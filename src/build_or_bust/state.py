@@ -22,12 +22,14 @@ class BuildOrBustState(TypedDict, total=False):
     missing_fields: list[str]
     clarification_question: str | None
     consumer_research: dict[str, Any] | None
-    research_sources: list[dict[str, str]]
+    research_sources: list[dict[str, Any]]
     competitor_research: dict[str, Any] | None
-    competitor_sources: list[dict[str, str]]
+    competitor_sources: list[dict[str, Any]]
     market_feasibility_research: dict[str, Any] | None
-    market_feasibility_sources: list[dict[str, str]]
+    market_feasibility_sources: list[dict[str, Any]]
+    evidence_assessment: dict[str, Any] | None
     assumption_analysis: dict[str, Any] | None
+    judgment: dict[str, Any] | None
     status: Literal[
         "pending",
         "needs_clarification",
@@ -36,7 +38,10 @@ class BuildOrBustState(TypedDict, total=False):
         "research_complete",
         "competitor_research_complete",
         "market_feasibility_complete",
+        "evidence_sufficient",
+        "insufficient_evidence",
         "assumption_analysis_complete",
+        "judgment_complete",
         "error",
     ]
     error_code: str | None

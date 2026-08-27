@@ -16,7 +16,7 @@ class MarketFeasibilityResearch(BaseModel):
     adoption_constraints: list[str] = Field(min_length=1, max_length=5)
     technical_dependencies: list[str] = Field(min_length=1, max_length=5)
     feasibility_risks: list[str] = Field(min_length=1, max_length=5)
-    evidence_gaps: list[str] = Field(default_factory=list, max_length=5)
+    evidence_gaps: list[str] = Field(max_length=5)
 
 
 class MarketFeasibilityFailure(Exception):
@@ -67,6 +67,16 @@ class YouMCPMarketFeasibilityResearcher:
             content, sources = self.research_client.research(
                 question, MarketFeasibilityResearch.model_json_schema()
             )
+            for key in (
+                "demand_signals",
+                "market_proxies",
+                "adoption_constraints",
+                "technical_dependencies",
+                "feasibility_risks",
+                "evidence_gaps",
+            ):
+                if isinstance(content.get(key), list):
+                    content[key] = content[key][:5]
             report = MarketFeasibilityResearch.model_validate(content)
             return report, sources
         except MarketFeasibilityFailure:

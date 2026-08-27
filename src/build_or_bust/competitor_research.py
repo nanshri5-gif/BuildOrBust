@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Protocol
+from typing import Any, Protocol
 
 import openai
 from openai import OpenAI
@@ -37,7 +37,7 @@ class CompetitorResearchFailure(Exception):
 class CompetitorResearcher(Protocol):
     def research(
         self, state: BuildOrBustState
-    ) -> tuple[CompetitorResearch, list[dict[str, str]]]: ...
+    ) -> tuple[CompetitorResearch, list[dict[str, Any]]]: ...
 
 
 class CompetitorEvidenceClient(Protocol):
@@ -71,7 +71,7 @@ class YouMCPCompetitorResearcher:
 
     def research(
         self, state: BuildOrBustState
-    ) -> tuple[CompetitorResearch, list[dict[str, str]]]:
+    ) -> tuple[CompetitorResearch, list[dict[str, Any]]]:
         query = (
             f"{state['product_type']} competitors alternatives pricing for "
             f"{state['target_customer']} {state['geography']} {state['problem']}"
@@ -79,10 +79,14 @@ class YouMCPCompetitorResearcher:
         try:
             hits = self.evidence_client.search(query)
             evidence = []
+            extracted_urls: set[str] = set()
             for hit in hits[:3]:
                 item = hit.model_dump()
                 try:
-                    item["page_content"] = self.evidence_client.contents(hit.url)[:8000]
+                    page_content = self.evidence_client.contents(hit.url)[:8000].strip()
+                    item["page_content"] = page_content
+                    if page_content:
+                        extracted_urls.add(hit.url)
                 except Exception as exc:
                     item["page_content_error"] = str(exc)
                 evidence.append(item)
@@ -158,5 +162,12 @@ class YouMCPCompetitorResearcher:
                 "The Nebius competitor synthesis request failed."
             ) from exc
 
-        sources = [{"title": hit.title, "url": hit.url} for hit in hits]
+        sources = [
+            {
+                "title": hit.title,
+                "url": hit.url,
+                "content_extracted": hit.url in extracted_urls,
+            }
+            for hit in hits
+        ]
         return report, sources

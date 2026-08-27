@@ -19,6 +19,8 @@ from .competitor_research import (
 )
 from .consumer_research import Researcher, ResearchFailure, YouMCPConsumerResearcher
 from .extractor import ExtractionFailure, Extractor, NebiusExtractor
+from .evidence_gate import EvidenceGate
+from .judge import Judge, JudgeFailure, NebiusJudge
 from .market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearcher,
@@ -39,8 +41,12 @@ def build_graph(
     competitor_researcher: CompetitorResearcher,
     market_feasibility_researcher: MarketFeasibilityResearcher,
     assumption_killer: AssumptionKiller,
+    judge: Judge,
     checkpointer: Any,
+    evidence_gate: EvidenceGate | None = None,
 ):
+    gate = evidence_gate or EvidenceGate()
+
     def intake(state: BuildOrBustState) -> dict[str, Any]:
         raw_input = (state.get("raw_input") or "").strip()
         if not raw_input:
@@ -167,7 +173,44 @@ def build_graph(
 
     def route_after_market_feasibility(state: BuildOrBustState) -> str:
         if state.get("status") == "market_feasibility_complete":
+            return "evidence_gate"
+        return "done"
+
+    def assess_evidence(state: BuildOrBustState) -> dict[str, Any]:
+        assessment = gate.assess(state)
+        return {
+            "evidence_assessment": assessment.model_dump(),
+            "status": (
+                "evidence_sufficient"
+                if assessment.sufficient
+                else "insufficient_evidence"
+            ),
+        }
+
+    def route_after_evidence_gate(state: BuildOrBustState) -> str:
+        if state.get("status") == "evidence_sufficient":
             return "assumptions"
+        return "done"
+
+    def judgment(state: BuildOrBustState) -> dict[str, Any]:
+        try:
+            result = judge.decide(state)
+        except JudgeFailure as exc:
+            return {
+                "status": "error",
+                "error_code": exc.code,
+                "error_message": str(exc),
+            }
+        return {
+            "judgment": result.model_dump(),
+            "status": "judgment_complete",
+            "error_code": None,
+            "error_message": None,
+        }
+
+    def route_after_assumption_analysis(state: BuildOrBustState) -> str:
+        if state.get("status") == "assumption_analysis_complete":
+            return "judge"
         return "done"
 
     builder = StateGraph(BuildOrBustState)
@@ -176,7 +219,9 @@ def build_graph(
     builder.add_node("consumer_research", consumer_research)
     builder.add_node("competitor_research", competitor_research)
     builder.add_node("market_feasibility_research", market_feasibility_research)
+    builder.add_node("evidence_gate", assess_evidence)
     builder.add_node("assumption_analysis", assumption_analysis)
+    builder.add_node("judgment", judgment)
     builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
@@ -197,9 +242,19 @@ def build_graph(
     builder.add_conditional_edges(
         "market_feasibility_research",
         route_after_market_feasibility,
+        {"evidence_gate": "evidence_gate", "done": END},
+    )
+    builder.add_conditional_edges(
+        "evidence_gate",
+        route_after_evidence_gate,
         {"assumptions": "assumption_analysis", "done": END},
     )
-    builder.add_edge("assumption_analysis", END)
+    builder.add_conditional_edges(
+        "assumption_analysis",
+        route_after_assumption_analysis,
+        {"judge": "judgment", "done": END},
+    )
+    builder.add_edge("judgment", END)
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -211,6 +266,7 @@ def open_graph(
     competitor_researcher: CompetitorResearcher | None = None,
     market_feasibility_researcher: MarketFeasibilityResearcher | None = None,
     assumption_killer: AssumptionKiller | None = None,
+    judge: Judge | None = None,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -220,6 +276,7 @@ def open_graph(
             competitor_researcher or YouMCPCompetitorResearcher(),
             market_feasibility_researcher or YouMCPMarketFeasibilityResearcher(),
             assumption_killer or NebiusAssumptionKiller(),
+            judge or NebiusJudge(),
             SqliteSaver(connection),
         )
     finally:

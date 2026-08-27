@@ -25,6 +25,12 @@ from build_or_bust.consumer_research import (
 from build_or_bust.extractor import ExtractionFailure, IntakeData, NebiusExtractor
 from build_or_bust.cli import _show_sources
 from build_or_bust.graph import build_graph
+from build_or_bust.judge import (
+    DecisionCriterion,
+    JudgeFailure,
+    Judgment,
+    NebiusJudge,
+)
 from build_or_bust.market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearch,
@@ -54,7 +60,11 @@ class FakeResearcher:
                 current_behaviors=["Use handwritten lists"],
                 evidence_gaps=["Willingness to pay is unknown"],
             ),
-            [{"title": "Consumer study", "url": "https://example.com/study"}],
+            [
+                {"title": "Consumer study", "url": "https://example.com/study"},
+                {"title": "Parent survey", "url": "https://research.org/parents"},
+                {"title": "Time-use data", "url": "https://research.org/time-use"},
+            ],
         )
         self.calls = 0
 
@@ -83,7 +93,18 @@ class FakeCompetitorResearcher:
                 differentiation_gaps=["Family collaboration"],
                 evidence_gaps=["Current subscriber count is unknown"],
             ),
-            [{"title": "Meal App pricing", "url": "https://example.com/pricing"}],
+            [
+                {
+                    "title": "Meal App pricing",
+                    "url": "https://mealapp.com/pricing",
+                    "content_extracted": True,
+                },
+                {
+                    "title": "Competitor review",
+                    "url": "https://reviews.org/meal-app",
+                    "content_extracted": False,
+                },
+            ],
         )
         self.calls = 0
 
@@ -106,7 +127,11 @@ class FakeMarketFeasibilityResearcher:
                 feasibility_risks=["Recommendations may not satisfy every family member"],
                 evidence_gaps=["Willingness to pay is not established"],
             ),
-            [{"title": "Market evidence", "url": "https://example.com/market"}],
+            [
+                {"title": "Market evidence", "url": "https://example.com/market"},
+                {"title": "Adoption study", "url": "https://research.org/adoption"},
+                {"title": "Technical review", "url": "https://research.org/technical"},
+            ],
         )
         self.calls = 0
 
@@ -152,6 +177,41 @@ class FakeAssumptionKiller:
         return self.output
 
 
+class FakeJudge:
+    def __init__(self, output=None):
+        self.output = output or Judgment(
+            decision="VALIDATE",
+            confidence=0.72,
+            reasoning="The problem appears real, but key commercial assumptions remain open.",
+            decisive_evidence=["Parents report a recurring planning burden"],
+            blocking_uncertainties=["Willingness to pay is unknown"],
+            decision_criteria=[
+                DecisionCriterion(
+                    criterion="Problem evidence",
+                    status="supported",
+                    evidence="Consumer research identifies recurring planning burden.",
+                ),
+                DecisionCriterion(
+                    criterion="Differentiation",
+                    status="unknown",
+                    evidence="Competitor research identifies an untested collaboration gap.",
+                ),
+                DecisionCriterion(
+                    criterion="Commercial demand",
+                    status="unknown",
+                    evidence="Willingness to pay has not been established.",
+                ),
+            ],
+        )
+        self.calls = 0
+
+    def decide(self, state):
+        self.calls += 1
+        if isinstance(self.output, Exception):
+            raise self.output
+        return self.output
+
+
 def complete_data(**changes):
     values = {
         "product_idea": "A meal-planning app",
@@ -176,6 +236,7 @@ def test_missing_input_does_not_call_model_provider():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": ""}, config=config()
@@ -184,28 +245,30 @@ def test_missing_input_does_not_call_model_provider():
     assert extractor.calls == 0
 
 
-def test_complete_intake_runs_both_research_stages():
+def test_complete_flow_reaches_judgment():
     researcher = FakeResearcher()
     competitor_researcher = FakeCompetitorResearcher()
     market_researcher = FakeMarketFeasibilityResearcher()
     assumption_killer = FakeAssumptionKiller()
+    judge = FakeJudge()
     result = build_graph(
         FakeExtractor([complete_data()]),
         researcher,
         competitor_researcher,
         market_researcher,
         assumption_killer,
+        judge,
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
     )
-    assert result["status"] == "assumption_analysis_complete"
+    assert result["status"] == "judgment_complete"
     assert result["missing_fields"] == []
     assert result["consumer_research"]["pain_points"] == ["Planning takes time"]
     assert result["research_sources"][0]["url"] == "https://example.com/study"
     assert researcher.calls == 1
     assert result["competitor_research"]["direct_competitors"][0]["name"] == "Meal App"
-    assert result["competitor_sources"][0]["url"] == "https://example.com/pricing"
+    assert result["competitor_sources"][0]["url"] == "https://mealapp.com/pricing"
     assert competitor_researcher.calls == 1
     assert result["market_feasibility_research"]["demand_signals"] == [
         "Parents report recurring planning burden"
@@ -214,6 +277,38 @@ def test_complete_intake_runs_both_research_stages():
     assert market_researcher.calls == 1
     assert len(result["assumption_analysis"]["critical_assumptions"]) == 3
     assert assumption_killer.calls == 1
+    assert result["judgment"]["decision"] == "VALIDATE"
+    assert judge.calls == 1
+    assert result["evidence_assessment"]["sufficient"] is True
+
+
+def test_weak_evidence_stops_before_assumption_killer_and_judge():
+    weak_consumer = FakeResearcher()
+    weak_consumer.output = (
+        weak_consumer.output[0],
+        [{"title": "Only source", "url": "https://example.com/study"}],
+    )
+    assumption_killer = FakeAssumptionKiller()
+    judge = FakeJudge()
+
+    result = build_graph(
+        FakeExtractor([complete_data()]),
+        weak_consumer,
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        assumption_killer,
+        judge,
+        InMemorySaver(),
+    ).invoke({"raw_input": "idea"}, config=config("weak-evidence"))
+
+    assert result["status"] == "insufficient_evidence"
+    assert result["evidence_assessment"]["sufficient"] is False
+    assert any(
+        "consumer needs at least 3 valid unique sources" in check
+        for check in result["evidence_assessment"]["failed_checks"]
+    )
+    assert assumption_killer.calls == 0
+    assert judge.calls == 0
 
 
 def test_missing_fields_interrupt_and_resume():
@@ -227,12 +322,13 @@ def test_missing_fields_interrupt_and_resume():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     )
     first = graph.invoke({"raw_input": "idea"}, config=config())
     assert first["__interrupt__"][0].value["missing_fields"] == ["geography"]
     resumed = graph.invoke(Command(resume="Launch in Canada"), config=config())
-    assert resumed["status"] == "assumption_analysis_complete"
+    assert resumed["status"] == "judgment_complete"
     assert resumed["geography"] == "Canada"
     assert extractor.calls == 2
 
@@ -245,6 +341,7 @@ def test_api_failure_is_explicit():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
@@ -261,6 +358,7 @@ def test_malformed_output_is_explicit():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
@@ -320,16 +418,19 @@ def test_nebius_extractor_rejects_invalid_json():
 
 
 def test_consumer_research_failure_is_explicit():
+    judge = FakeJudge()
     result = build_graph(
         FakeExtractor([complete_data()]),
         FakeResearcher(ResearchFailure("search failed")),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        judge,
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
     assert result["error_code"] == "consumer_research_failure"
+    assert judge.calls == 0
 
 
 def test_competitor_research_failure_is_explicit():
@@ -339,6 +440,7 @@ def test_competitor_research_failure_is_explicit():
         FakeCompetitorResearcher(CompetitorResearchFailure("search failed")),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
@@ -352,6 +454,7 @@ def test_market_feasibility_failure_is_explicit():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(MarketFeasibilityFailure("search failed")),
         FakeAssumptionKiller(),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
@@ -365,10 +468,87 @@ def test_assumption_killer_failure_is_explicit():
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
         FakeAssumptionKiller(AssumptionKillerFailure("analysis failed")),
+        FakeJudge(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
     assert result["error_code"] == "assumption_killer_failure"
+
+
+def test_judge_failure_is_explicit():
+    result = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(JudgeFailure("judgment failed")),
+        InMemorySaver(),
+    ).invoke({"raw_input": "idea"}, config=config())
+    assert result["status"] == "error"
+    assert result["error_code"] == "judge_failure"
+
+
+def test_nebius_judge_uses_schema_without_tools():
+    judgment = FakeJudge().output
+
+    class FakeCompletions:
+        def __init__(self):
+            self.arguments = None
+
+        def create(self, **kwargs):
+            self.arguments = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=judgment.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    result = NebiusJudge(client=client, model="test-model").decide(
+        {
+            "product_idea": "idea",
+            "target_customer": "customer",
+            "geography": "place",
+            "problem": "problem",
+            "product_type": "app",
+            "consumer_research": {},
+            "competitor_research": {},
+            "market_feasibility_research": {},
+            "assumption_analysis": {},
+        }
+    )
+    assert result == judgment
+    assert "tools" not in completions.arguments
+    assert completions.arguments["response_format"]["type"] == "json_schema"
+    assert completions.arguments["response_format"]["json_schema"]["strict"] is True
+
+
+def test_nebius_judge_rejects_malformed_json():
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="not-json", refusal=None)
+                        )
+                    ]
+                )
+            )
+        )
+    )
+    try:
+        NebiusJudge(client=client, model="test-model").decide({})
+    except JudgeFailure as exc:
+        assert exc.code == "malformed_output"
+    else:
+        raise AssertionError("Malformed Nebius JSON should fail judgment")
 
 
 def test_nebius_assumption_killer_uses_schema_without_tools():
@@ -560,7 +740,11 @@ def test_competitor_research_uses_mcp_search_and_page_contents():
     assert evidence_client.content_urls == ["https://example.com/pricing"]
     assert report.direct_competitors[0].name == "Meal App"
     assert sources == [
-        {"title": "Meal App pricing", "url": "https://example.com/pricing"}
+        {
+            "title": "Meal App pricing",
+            "url": "https://example.com/pricing",
+            "content_extracted": True,
+        }
     ]
     prompt = completions.arguments["messages"][1]["content"]
     assert "$5 per month" in prompt
@@ -577,7 +761,9 @@ def test_market_research_uses_mcp_structured_research():
             self.question = question
             self.schema = output_schema
             report = FakeMarketFeasibilityResearcher().output[0]
-            return report.model_dump(), [
+            content = report.model_dump()
+            content["demand_signals"] = [f"Signal {number}" for number in range(6)]
+            return content, [
                 {"title": "Market evidence", "url": "https://example.com/market"}
             ]
 
@@ -592,7 +778,10 @@ def test_market_research_uses_mcp_structured_research():
     assert "market signals and implementation feasibility" in research_client.question
     assert "Meal App" in research_client.question
     assert research_client.schema["additionalProperties"] is False
-    assert report.demand_signals == ["Parents report recurring planning burden"]
+    assert set(research_client.schema["required"]) == set(
+        research_client.schema["properties"]
+    )
+    assert report.demand_signals == [f"Signal {number}" for number in range(5)]
     assert sources == [
         {"title": "Market evidence", "url": "https://example.com/market"}
     ]
