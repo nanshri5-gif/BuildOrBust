@@ -2,9 +2,8 @@
 
 The workflow turns a raw product idea into validated shared state. If required
 facts are absent, execution pauses for a human answer and resumes from a SQLite
-checkpoint. Once intake is complete, Consumer and Competitor Research use
-You.com tools through MCP, while Market and Feasibility Research still uses
-OpenAI web search to collect evidence.
+checkpoint. Once intake is complete, Consumer, Competitor, and Market and
+Feasibility Research use You.com tools through MCP.
 The Assumption Killer then challenges the idea using only those saved reports.
 Intake and clarification use Nebius Token Factory with JSON-schema output.
 
@@ -22,9 +21,8 @@ Copy-Item .env.example .env
 Put your OpenAI and Nebius API keys in `.env`, and set `NEBIUS_MODEL` to a Nebius
 model marked as supporting JSON mode. Add `YDC_API_KEY` for authenticated You.com
 MCP access; without it, Consumer Research uses You.com's limited free search
-profile, but Competitor Research cannot extract full pages. Market Research
-still performs a billed OpenAI web-search request. The Assumption Killer performs
-one structured OpenAI model call:
+profile, but Competitor page extraction and Market Research are unavailable.
+The Assumption Killer still performs one structured OpenAI model call:
 
 ```powershell
 build-or-bust "A mobile app that helps busy US parents plan weeknight meals"
@@ -45,7 +43,7 @@ Run `pytest` to verify the error, resume, and research paths without calling Ope
 - `extractor.py` calls Nebius chat completions and validates JSON with Pydantic.
 - `consumer_research.py` calls You.com through MCP, then uses Nebius to validate a focused consumer report.
 - `competitor_research.py` uses MCP search and page extraction for competitors and pricing.
-- `market_feasibility.py` researches demand signals and implementation feasibility.
+- `market_feasibility.py` uses MCP structured research for demand and feasibility evidence.
 - `assumption_killer.py` challenges critical assumptions using saved evidence only.
 - `graph.py` routes intake, clarification, research, and assumption analysis.
 - `cli.py` starts or resumes a run.

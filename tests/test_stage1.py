@@ -28,6 +28,7 @@ from build_or_bust.graph import build_graph
 from build_or_bust.market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearch,
+    YouMCPMarketFeasibilityResearcher,
 )
 
 
@@ -532,6 +533,37 @@ def test_competitor_research_uses_mcp_search_and_page_contents():
     prompt = completions.arguments["messages"][1]["content"]
     assert "$5 per month" in prompt
     assert completions.arguments["response_format"]["type"] == "json_schema"
+
+
+def test_market_research_uses_mcp_structured_research():
+    class FakeMarketResearchClient:
+        def __init__(self):
+            self.question = None
+            self.schema = None
+
+        def research(self, question, output_schema):
+            self.question = question
+            self.schema = output_schema
+            report = FakeMarketFeasibilityResearcher().output[0]
+            return report.model_dump(), [
+                {"title": "Market evidence", "url": "https://example.com/market"}
+            ]
+
+    research_client = FakeMarketResearchClient()
+    state = complete_data().model_dump()
+    state["consumer_research"] = {"summary": "Parents need simpler planning."}
+    state["competitor_research"] = {
+        "direct_competitors": [{"name": "Meal App"}]
+    }
+    report, sources = YouMCPMarketFeasibilityResearcher(research_client).research(state)
+
+    assert "market signals and implementation feasibility" in research_client.question
+    assert "Meal App" in research_client.question
+    assert research_client.schema["additionalProperties"] is False
+    assert report.demand_signals == ["Parents report recurring planning burden"]
+    assert sources == [
+        {"title": "Market evidence", "url": "https://example.com/market"}
+    ]
 
 
 def test_cli_limits_displayed_sources_but_reports_remainder(capsys):

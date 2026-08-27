@@ -42,27 +42,6 @@ class SearchClient(Protocol):
     def search(self, query: str) -> list[SearchHit]: ...
 
 
-def _sources(response: object) -> list[dict[str, str]]:
-    """Temporary OpenAI source adapter used by research nodes not yet on MCP."""
-
-    found: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    def value(item: object, name: str):
-        if isinstance(item, dict):
-            return item.get(name)
-        return getattr(item, name, None)
-
-    for item in getattr(response, "output", []):
-        action = value(item, "action")
-        for source in value(action, "sources") or []:
-            url = value(source, "url")
-            if url and url not in seen:
-                found.append({"title": value(source, "title") or url, "url": url})
-                seen.add(url)
-    return found
-
-
 def _find_hits(value: Any) -> list[SearchHit]:
     """Find You.com result objects without depending on an undocumented wrapper key."""
 
@@ -92,7 +71,7 @@ class YouMCPClient:
     def __init__(self, url: str | None = None, api_key: str | None = None):
         self.api_key = api_key if api_key is not None else os.getenv("YDC_API_KEY")
         default_url = (
-            "https://api.you.com/mcp?tools=you-search,you-contents"
+            "https://api.you.com/mcp?tools=you-search,you-contents,you-research"
             if self.api_key
             else "https://api.you.com/mcp?profile=free"
         )
@@ -154,6 +133,70 @@ class YouMCPClient:
         if not page:
             raise ResearchFailure("You.com MCP returned malformed page content.")
         return page
+
+    def research(
+        self, question: str, output_schema: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        if not self.api_key:
+            raise ResearchFailure("You.com research requires YDC_API_KEY.")
+        try:
+            return asyncio.run(self._research(question, output_schema))
+        except ResearchFailure:
+            raise
+        except Exception as exc:
+            raise ResearchFailure(f"You.com MCP connection or tool failure: {exc}") from exc
+
+    async def _research(
+        self, question: str, output_schema: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        result = await self._call_tool(
+            "you-research",
+            {
+                "input": question,
+                "research_effort": "standard",
+                "output_schema": output_schema,
+            },
+        )
+        payload = self._payload(result, "research")
+
+        def output(value: Any) -> dict[str, Any] | None:
+            if isinstance(value, dict):
+                if "content" in value and "sources" in value:
+                    return value
+                for item in value.values():
+                    if found := output(item):
+                        return found
+            elif isinstance(value, list):
+                for item in value:
+                    if found := output(item):
+                        return found
+            return None
+
+        research_output = output(payload)
+        if not research_output:
+            raise ResearchFailure("You.com MCP returned malformed research output.")
+        content = research_output["content"]
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise ResearchFailure("You.com MCP returned malformed structured research.") from exc
+        if not isinstance(content, dict):
+            raise ResearchFailure("You.com MCP returned non-object structured research.")
+
+        sources = []
+        seen = set()
+        for source in research_output.get("sources") or []:
+            if not isinstance(source, dict) or not isinstance(source.get("url"), str):
+                continue
+            if source["url"] not in seen:
+                sources.append(
+                    {"title": source.get("title") or source["url"], "url": source["url"]}
+                )
+                seen.add(source["url"])
+        if not sources:
+            raise ResearchFailure("You.com MCP research returned without source URLs.")
+        return content, sources
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]):
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

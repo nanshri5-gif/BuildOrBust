@@ -22,7 +22,7 @@ from .extractor import ExtractionFailure, Extractor, NebiusExtractor
 from .market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearcher,
-    OpenAIMarketFeasibilityResearcher,
+    YouMCPMarketFeasibilityResearcher,
 )
 from .state import BuildOrBustState, REQUIRED_FIELDS
 
@@ -218,7 +218,7 @@ def open_graph(
             extractor or NebiusExtractor(),
             researcher or YouMCPConsumerResearcher(),
             competitor_researcher or YouMCPCompetitorResearcher(),
-            market_feasibility_researcher or OpenAIMarketFeasibilityResearcher(),
+            market_feasibility_researcher or YouMCPMarketFeasibilityResearcher(),
             assumption_killer or OpenAIAssumptionKiller(),
             SqliteSaver(connection),
         )
