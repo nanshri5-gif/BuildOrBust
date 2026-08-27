@@ -7,7 +7,7 @@ from build_or_bust.assumption_killer import (
     AssumptionAnalysis,
     AssumptionKillerFailure,
     CriticalAssumption,
-    OpenAIAssumptionKiller,
+    NebiusAssumptionKiller,
 )
 from build_or_bust.competitor_research import (
     Competitor,
@@ -371,20 +371,28 @@ def test_assumption_killer_failure_is_explicit():
     assert result["error_code"] == "assumption_killer_failure"
 
 
-def test_assumption_killer_does_not_receive_web_search_tool():
+def test_nebius_assumption_killer_uses_schema_without_tools():
     report = FakeAssumptionKiller().output
 
-    class FakeResponses:
+    class FakeCompletions:
         def __init__(self):
             self.arguments = None
 
-        def parse(self, **kwargs):
+        def create(self, **kwargs):
             self.arguments = kwargs
-            return SimpleNamespace(output_parsed=report)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=report.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
 
-    responses = FakeResponses()
-    client = SimpleNamespace(responses=responses)
-    result = OpenAIAssumptionKiller(client=client, model="test-model").analyze(
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    result = NebiusAssumptionKiller(client=client, model="test-model").analyze(
         {
             "product_idea": "idea",
             "target_customer": "customer",
@@ -397,7 +405,31 @@ def test_assumption_killer_does_not_receive_web_search_tool():
         }
     )
     assert result == report
-    assert "tools" not in responses.arguments
+    assert "tools" not in completions.arguments
+    assert completions.arguments["response_format"]["type"] == "json_schema"
+    assert completions.arguments["response_format"]["json_schema"]["strict"] is True
+
+
+def test_nebius_assumption_killer_rejects_malformed_json():
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="not-json", refusal=None)
+                        )
+                    ]
+                )
+            )
+        )
+    )
+    try:
+        NebiusAssumptionKiller(client=client, model="test-model").analyze({})
+    except AssumptionKillerFailure as exc:
+        assert exc.code == "malformed_output"
+    else:
+        raise AssertionError("Malformed Nebius JSON should fail assumption analysis")
 
 
 def test_find_hits_accepts_nested_you_search_results():

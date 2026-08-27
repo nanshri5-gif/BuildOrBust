@@ -18,11 +18,11 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Put your OpenAI and Nebius API keys in `.env`, and set `NEBIUS_MODEL` to a Nebius
-model marked as supporting JSON mode. Add `YDC_API_KEY` for authenticated You.com
+Put your Nebius API key in `.env`, and set `NEBIUS_MODEL` to a Nebius model
+marked as supporting JSON mode. Add `YDC_API_KEY` for authenticated You.com
 MCP access; without it, Consumer Research uses You.com's limited free search
 profile, but Competitor page extraction and Market Research are unavailable.
-The Assumption Killer still performs one structured OpenAI model call:
+The Assumption Killer performs one structured Nebius model call:
 
 ```powershell
 build-or-bust "A mobile app that helps busy US parents plan weeknight meals"
@@ -35,7 +35,7 @@ build-or-bust --thread YOUR_THREAD_ID --resume "The first market is Canada"
 ```
 
 The same thread ID is essential: LangGraph uses it to find the saved checkpoint.
-Run `pytest` to verify the error, resume, and research paths without calling OpenAI.
+Run `pytest` to verify the error, resume, and research paths without calling live APIs.
 
 ## Files
 
@@ -44,7 +44,7 @@ Run `pytest` to verify the error, resume, and research paths without calling Ope
 - `consumer_research.py` calls You.com through MCP, then uses Nebius to validate a focused consumer report.
 - `competitor_research.py` uses MCP search and page extraction for competitors and pricing.
 - `market_feasibility.py` uses MCP structured research for demand and feasibility evidence.
-- `assumption_killer.py` challenges critical assumptions using saved evidence only.
+- `assumption_killer.py` uses Nebius to challenge assumptions from saved evidence only.
 - `graph.py` routes intake, clarification, research, and assumption analysis.
 - `cli.py` starts or resumes a run.
 - `tests/test_stage1.py` covers all five stages with fake API collaborators.

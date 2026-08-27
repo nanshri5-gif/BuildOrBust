@@ -10,7 +10,7 @@ from langgraph.types import interrupt
 from .assumption_killer import (
     AssumptionKiller,
     AssumptionKillerFailure,
-    OpenAIAssumptionKiller,
+    NebiusAssumptionKiller,
 )
 from .competitor_research import (
     CompetitorResearcher,
@@ -155,7 +155,7 @@ def build_graph(
         except AssumptionKillerFailure as exc:
             return {
                 "status": "error",
-                "error_code": "assumption_killer_failure",
+                "error_code": exc.code,
                 "error_message": str(exc),
             }
         return {
@@ -219,7 +219,7 @@ def open_graph(
             researcher or YouMCPConsumerResearcher(),
             competitor_researcher or YouMCPCompetitorResearcher(),
             market_feasibility_researcher or YouMCPMarketFeasibilityResearcher(),
-            assumption_killer or OpenAIAssumptionKiller(),
+            assumption_killer or NebiusAssumptionKiller(),
             SqliteSaver(connection),
         )
     finally:

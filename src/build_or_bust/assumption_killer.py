@@ -33,19 +33,38 @@ class AssumptionAnalysis(BaseModel):
 
 
 class AssumptionKillerFailure(Exception):
-    pass
+    def __init__(self, message: str, code: str = "assumption_killer_failure"):
+        super().__init__(message)
+        self.code = code
 
 
 class AssumptionKiller(Protocol):
     def analyze(self, state: BuildOrBustState) -> AssumptionAnalysis: ...
 
 
-class OpenAIAssumptionKiller:
+class NebiusAssumptionKiller:
     def __init__(self, client: OpenAI | None = None, model: str | None = None):
-        self.client = client or OpenAI(max_retries=2, timeout=60.0)
-        self.model = model or os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-luna")
+        api_key = os.getenv("NEBIUS_API_KEY")
+        self.client = client or (
+            OpenAI(
+                api_key=api_key,
+                base_url=os.getenv(
+                    "NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1/"
+                ),
+                max_retries=2,
+                timeout=60.0,
+            )
+            if api_key
+            else None
+        )
+        self.model = model or os.getenv("NEBIUS_MODEL")
 
     def analyze(self, state: BuildOrBustState) -> AssumptionAnalysis:
+        if self.client is None or not self.model:
+            raise AssumptionKillerFailure(
+                "Set NEBIUS_API_KEY and NEBIUS_MODEL before assumption analysis.",
+                "nebius_configuration_failure",
+            )
         evidence = {
             "intake": {
                 "product_idea": state.get("product_idea"),
@@ -70,23 +89,52 @@ class OpenAIAssumptionKiller:
             f"EVIDENCE:\n{json.dumps(evidence, ensure_ascii=False)}"
         )
         try:
-            response = self.client.responses.parse(
+            response = self.client.chat.completions.create(
                 model=self.model,
-                input=prompt,
-                text_format=AssumptionAnalysis,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Return only assumption analysis JSON matching the schema.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "assumption_analysis",
+                        "strict": True,
+                        "schema": AssumptionAnalysis.model_json_schema(),
+                    },
+                },
             )
-            if response.output_parsed is None:
+            message = response.choices[0].message
+            if getattr(message, "refusal", None):
                 raise AssumptionKillerFailure(
-                    "OpenAI returned no parseable assumption analysis."
+                    "Nebius refused to perform assumption analysis.", "model_refusal"
                 )
-            return response.output_parsed
+            if not message.content:
+                raise AssumptionKillerFailure(
+                    "Nebius returned no assumption analysis.", "malformed_output"
+                )
+            return AssumptionAnalysis.model_validate(json.loads(message.content))
         except AssumptionKillerFailure:
             raise
+        except (IndexError, AttributeError, json.JSONDecodeError) as exc:
+            raise AssumptionKillerFailure(
+                f"Malformed assumption analysis: {exc}", "malformed_output"
+            ) from exc
         except (ValidationError, ValueError, TypeError) as exc:
             raise AssumptionKillerFailure(
-                f"Malformed assumption analysis: {exc}"
+                f"Malformed assumption analysis: {exc}", "malformed_output"
             ) from exc
         except openai.APIError as exc:
+            status = getattr(exc, "status_code", None)
+            body = getattr(exc, "body", None)
+            detail = body.get("detail") if isinstance(body, dict) else None
+            context = f" (HTTP {status})" if status else ""
+            if isinstance(detail, str) and detail:
+                context += f": {detail}"
             raise AssumptionKillerFailure(
-                "The OpenAI assumption analysis request failed."
+                f"The Nebius assumption analysis request failed{context}.",
+                "nebius_api_failure",
             ) from exc
