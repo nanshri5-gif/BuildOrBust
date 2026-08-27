@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "build-or-bust"
 version = "0.1.0"
-description = "Resumable product intake and evidence-backed consumer research"
+description = "Resumable product intake and evidence-backed discovery research"
 requires-python = ">=3.11"
 dependencies = [
   "langgraph>=0.4,<2",

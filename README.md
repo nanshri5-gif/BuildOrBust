@@ -1,12 +1,12 @@
-# Build or Bust — Stages 1–2
+# Build or Bust — Stages 1–4
 
 The workflow turns a raw product idea into validated shared state. If required
 facts are absent, execution pauses for a human answer and resumes from a SQLite
-checkpoint. Once intake is complete, a single Consumer Research node uses OpenAI
-web search to collect sourced pain points and current behaviors.
+checkpoint. Once intake is complete, Consumer Research, Competitor Research, and
+Market and Feasibility Research nodes use OpenAI web search to collect evidence.
 
-This intentionally does not include competitor, market, technical, judge, or
-recommendation agents.
+This intentionally does not include Assumption Killer, Judge, or Recommendation
+agents.
 
 ## Setup
 
@@ -17,8 +17,8 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Put your OpenAI API key in `.env`, then run. Stage 2 performs a billed OpenAI web
-search call after intake is complete:
+Put your OpenAI API key in `.env`, then run. Stages 2, 3, and 4 each perform a
+billed OpenAI web-search request after intake is complete:
 
 ```powershell
 build-or-bust "A mobile app that helps busy US parents plan weeknight meals"
@@ -38,6 +38,8 @@ Run `pytest` to verify the error, resume, and research paths without calling Ope
 - `state.py` defines the single shared state contract.
 - `extractor.py` calls the OpenAI Responses API with Pydantic structured output.
 - `consumer_research.py` runs focused web research and captures returned sources.
-- `graph.py` contains intake, human clarification, and consumer research routing.
+- `competitor_research.py` researches direct competitors, alternatives, and pricing.
+- `market_feasibility.py` researches demand signals and implementation feasibility.
+- `graph.py` routes intake, clarification, and all three research stages.
 - `cli.py` starts or resumes a run.
-- `tests/test_stage1.py` covers intake and research with fake API collaborators.
+- `tests/test_stage1.py` covers all four stages with fake API collaborators.

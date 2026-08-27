@@ -7,8 +7,18 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from .competitor_research import (
+    CompetitorResearcher,
+    CompetitorResearchFailure,
+    OpenAICompetitorResearcher,
+)
 from .consumer_research import OpenAIConsumerResearcher, Researcher, ResearchFailure
 from .extractor import ExtractionFailure, Extractor, OpenAIExtractor
+from .market_feasibility import (
+    MarketFeasibilityFailure,
+    MarketFeasibilityResearcher,
+    OpenAIMarketFeasibilityResearcher,
+)
 from .state import BuildOrBustState, REQUIRED_FIELDS
 
 
@@ -18,7 +28,13 @@ def _clean(value: str | None) -> str | None:
     return value.strip() or None
 
 
-def build_graph(extractor: Extractor, researcher: Researcher, checkpointer: Any):
+def build_graph(
+    extractor: Extractor,
+    researcher: Researcher,
+    competitor_researcher: CompetitorResearcher,
+    market_feasibility_researcher: MarketFeasibilityResearcher,
+    checkpointer: Any,
+):
     def intake(state: BuildOrBustState) -> dict[str, Any]:
         raw_input = (state.get("raw_input") or "").strip()
         if not raw_input:
@@ -83,10 +99,56 @@ def build_graph(extractor: Extractor, researcher: Researcher, checkpointer: Any)
             "error_message": None,
         }
 
+    def competitor_research(state: BuildOrBustState) -> dict[str, Any]:
+        try:
+            report, sources = competitor_researcher.research(state)
+        except CompetitorResearchFailure as exc:
+            return {
+                "status": "error",
+                "error_code": "competitor_research_failure",
+                "error_message": str(exc),
+            }
+        return {
+            "competitor_research": report.model_dump(),
+            "competitor_sources": sources,
+            "status": "competitor_research_complete",
+            "error_code": None,
+            "error_message": None,
+        }
+
+    def route_after_consumer_research(state: BuildOrBustState) -> str:
+        if state.get("status") == "research_complete":
+            return "competitors"
+        return "done"
+
+    def market_feasibility_research(state: BuildOrBustState) -> dict[str, Any]:
+        try:
+            report, sources = market_feasibility_researcher.research(state)
+        except MarketFeasibilityFailure as exc:
+            return {
+                "status": "error",
+                "error_code": "market_feasibility_failure",
+                "error_message": str(exc),
+            }
+        return {
+            "market_feasibility_research": report.model_dump(),
+            "market_feasibility_sources": sources,
+            "status": "market_feasibility_complete",
+            "error_code": None,
+            "error_message": None,
+        }
+
+    def route_after_competitor_research(state: BuildOrBustState) -> str:
+        if state.get("status") == "competitor_research_complete":
+            return "market_feasibility"
+        return "done"
+
     builder = StateGraph(BuildOrBustState)
     builder.add_node("intake", intake)
     builder.add_node("clarify", clarify)
     builder.add_node("consumer_research", consumer_research)
+    builder.add_node("competitor_research", competitor_research)
+    builder.add_node("market_feasibility_research", market_feasibility_research)
     builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
@@ -94,7 +156,17 @@ def build_graph(extractor: Extractor, researcher: Researcher, checkpointer: Any)
         {"clarify": "clarify", "research": "consumer_research", "done": END},
     )
     builder.add_edge("clarify", "intake")
-    builder.add_edge("consumer_research", END)
+    builder.add_conditional_edges(
+        "consumer_research",
+        route_after_consumer_research,
+        {"competitors": "competitor_research", "done": END},
+    )
+    builder.add_conditional_edges(
+        "competitor_research",
+        route_after_competitor_research,
+        {"market_feasibility": "market_feasibility_research", "done": END},
+    )
+    builder.add_edge("market_feasibility_research", END)
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -103,12 +175,16 @@ def open_graph(
     db_path: str = "build_or_bust.db",
     extractor: Extractor | None = None,
     researcher: Researcher | None = None,
+    competitor_researcher: CompetitorResearcher | None = None,
+    market_feasibility_researcher: MarketFeasibilityResearcher | None = None,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
         yield build_graph(
             extractor or OpenAIExtractor(),
             researcher or OpenAIConsumerResearcher(),
+            competitor_researcher or OpenAICompetitorResearcher(),
+            market_feasibility_researcher or OpenAIMarketFeasibilityResearcher(),
             SqliteSaver(connection),
         )
     finally:

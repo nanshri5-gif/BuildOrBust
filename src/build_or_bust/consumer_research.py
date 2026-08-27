@@ -29,15 +29,22 @@ class Researcher(Protocol):
 def _sources(response: object) -> list[dict[str, str]]:
     """Collect and deduplicate sources returned by the hosted web-search tool."""
 
-    payload = response.model_dump()  # type: ignore[attr-defined]
     found: list[dict[str, str]] = []
     seen: set[str] = set()
-    for item in payload.get("output", []):
-        action = item.get("action") or {}
-        for source in action.get("sources") or []:
-            url = source.get("url")
+
+    def value(item: object, name: str):
+        if isinstance(item, dict):
+            return item.get(name)
+        return getattr(item, name, None)
+
+    # Traverse only web-search items. Dumping the entire generic ParsedResponse
+    # asks Pydantic to serialize every possible output variant and emits warnings.
+    for item in getattr(response, "output", []):
+        action = value(item, "action")
+        for source in value(action, "sources") or []:
+            url = value(source, "url")
             if url and url not in seen:
-                found.append({"title": source.get("title") or url, "url": url})
+                found.append({"title": value(source, "title") or url, "url": url})
                 seen.add(url)
     return found
 
@@ -52,7 +59,8 @@ class OpenAIConsumerResearcher:
             "Research consumers only for this product concept. Find recent, credible "
             "evidence about their pain points and current behaviors. Do not analyze "
             "competitors, market size, technical feasibility, or make a build decision. "
-            "State uncertainty in evidence_gaps.\n\n"
+            "State uncertainty in evidence_gaps. Do not put URLs or citation markup "
+            "inside the structured fields; sources are captured separately.\n\n"
             f"Product idea: {state['product_idea']}\n"
             f"Target customer: {state['target_customer']}\n"
             f"Geography: {state['geography']}\n"
