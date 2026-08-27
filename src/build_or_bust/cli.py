@@ -84,11 +84,41 @@ def _show(result: dict) -> None:
                         print(f"    - {item}")
             print("  Sources:")
             _show_sources(result.get("market_feasibility_sources", []))
+        assumptions = result.get("assumption_analysis")
+        if assumptions:
+            print("\nAssumption Killer:")
+            print(f"  Summary: {assumptions['summary']}")
+            print("  Critical assumptions:")
+            for number, assumption in enumerate(
+                assumptions["critical_assumptions"], start=1
+            ):
+                print(f"    {number}. {assumption['statement']}")
+                print(f"       Category: {assumption['category']}")
+                print(f"       Evidence strength: {assumption['evidence_strength']}")
+                print(f"       Impact if false: {assumption['impact_if_false']}")
+                if assumption["evidence_for"]:
+                    print(f"       Evidence for: {'; '.join(assumption['evidence_for'])}")
+                if assumption["evidence_against"]:
+                    print(
+                        f"       Evidence against: {'; '.join(assumption['evidence_against'])}"
+                    )
+                print(f"       Experiment: {assumption['validation_experiment']}")
+                print(f"       Success criterion: {assumption['success_criterion']}")
+            sections = (
+                ("Contradictions", "contradictions"),
+                ("Fatal risks", "fatal_risks"),
+                ("Unresolved questions", "unresolved_questions"),
+            )
+            for label, key in sections:
+                if assumptions[key]:
+                    print(f"  {label}:")
+                    for item in assumptions[key]:
+                        print(f"    - {item}")
 
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–4")
+    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–5")
     parser.add_argument("idea", nargs="?", help="Product idea to normalize")
     parser.add_argument("--thread", default=str(uuid.uuid4()), help="Persistent run ID")
     parser.add_argument("--resume", help="Answer a saved clarification question")

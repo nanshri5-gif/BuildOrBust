@@ -7,6 +7,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from .assumption_killer import (
+    AssumptionKiller,
+    AssumptionKillerFailure,
+    OpenAIAssumptionKiller,
+)
 from .competitor_research import (
     CompetitorResearcher,
     CompetitorResearchFailure,
@@ -33,6 +38,7 @@ def build_graph(
     researcher: Researcher,
     competitor_researcher: CompetitorResearcher,
     market_feasibility_researcher: MarketFeasibilityResearcher,
+    assumption_killer: AssumptionKiller,
     checkpointer: Any,
 ):
     def intake(state: BuildOrBustState) -> dict[str, Any]:
@@ -143,12 +149,34 @@ def build_graph(
             return "market_feasibility"
         return "done"
 
+    def assumption_analysis(state: BuildOrBustState) -> dict[str, Any]:
+        try:
+            report = assumption_killer.analyze(state)
+        except AssumptionKillerFailure as exc:
+            return {
+                "status": "error",
+                "error_code": "assumption_killer_failure",
+                "error_message": str(exc),
+            }
+        return {
+            "assumption_analysis": report.model_dump(),
+            "status": "assumption_analysis_complete",
+            "error_code": None,
+            "error_message": None,
+        }
+
+    def route_after_market_feasibility(state: BuildOrBustState) -> str:
+        if state.get("status") == "market_feasibility_complete":
+            return "assumptions"
+        return "done"
+
     builder = StateGraph(BuildOrBustState)
     builder.add_node("intake", intake)
     builder.add_node("clarify", clarify)
     builder.add_node("consumer_research", consumer_research)
     builder.add_node("competitor_research", competitor_research)
     builder.add_node("market_feasibility_research", market_feasibility_research)
+    builder.add_node("assumption_analysis", assumption_analysis)
     builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
@@ -166,7 +194,12 @@ def build_graph(
         route_after_competitor_research,
         {"market_feasibility": "market_feasibility_research", "done": END},
     )
-    builder.add_edge("market_feasibility_research", END)
+    builder.add_conditional_edges(
+        "market_feasibility_research",
+        route_after_market_feasibility,
+        {"assumptions": "assumption_analysis", "done": END},
+    )
+    builder.add_edge("assumption_analysis", END)
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -177,6 +210,7 @@ def open_graph(
     researcher: Researcher | None = None,
     competitor_researcher: CompetitorResearcher | None = None,
     market_feasibility_researcher: MarketFeasibilityResearcher | None = None,
+    assumption_killer: AssumptionKiller | None = None,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -185,6 +219,7 @@ def open_graph(
             researcher or OpenAIConsumerResearcher(),
             competitor_researcher or OpenAICompetitorResearcher(),
             market_feasibility_researcher or OpenAIMarketFeasibilityResearcher(),
+            assumption_killer or OpenAIAssumptionKiller(),
             SqliteSaver(connection),
         )
     finally:

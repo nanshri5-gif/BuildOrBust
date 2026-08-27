@@ -3,6 +3,12 @@ from types import SimpleNamespace
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from build_or_bust.assumption_killer import (
+    AssumptionAnalysis,
+    AssumptionKillerFailure,
+    CriticalAssumption,
+    OpenAIAssumptionKiller,
+)
 from build_or_bust.competitor_research import (
     Competitor,
     CompetitorResearch,
@@ -103,6 +109,41 @@ class FakeMarketFeasibilityResearcher:
         return self.output
 
 
+def fake_assumption(statement: str, category: str = "consumer"):
+    return CriticalAssumption(
+        statement=statement,
+        category=category,
+        evidence_for=["Consumer research supports this"],
+        evidence_against=["Willingness to pay is unknown"],
+        evidence_strength="mixed",
+        impact_if_false="high",
+        validation_experiment="Interview 10 target users",
+        success_criterion="At least 7 describe the problem unprompted",
+    )
+
+
+class FakeAssumptionKiller:
+    def __init__(self, output=None):
+        self.output = output or AssumptionAnalysis(
+            summary="The idea depends on several unproven assumptions.",
+            critical_assumptions=[
+                fake_assumption("Parents want automated planning"),
+                fake_assumption("The product can differentiate", "competitive"),
+                fake_assumption("Required data is available", "technical"),
+            ],
+            contradictions=["Demand exists but willingness to pay is unknown"],
+            fatal_risks=["Families may reject generated meals"],
+            unresolved_questions=["Will parents maintain preference profiles?"],
+        )
+        self.calls = 0
+
+    def analyze(self, state):
+        self.calls += 1
+        if isinstance(self.output, Exception):
+            raise self.output
+        return self.output
+
+
 def complete_data(**changes):
     values = {
         "product_idea": "A meal-planning app",
@@ -126,6 +167,7 @@ def test_missing_input_does_not_call_openai():
         FakeResearcher(),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": ""}, config=config()
@@ -138,16 +180,18 @@ def test_complete_intake_runs_both_research_stages():
     researcher = FakeResearcher()
     competitor_researcher = FakeCompetitorResearcher()
     market_researcher = FakeMarketFeasibilityResearcher()
+    assumption_killer = FakeAssumptionKiller()
     result = build_graph(
         FakeExtractor([complete_data()]),
         researcher,
         competitor_researcher,
         market_researcher,
+        assumption_killer,
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
     )
-    assert result["status"] == "market_feasibility_complete"
+    assert result["status"] == "assumption_analysis_complete"
     assert result["missing_fields"] == []
     assert result["consumer_research"]["pain_points"] == ["Planning takes time"]
     assert result["research_sources"][0]["url"] == "https://example.com/study"
@@ -160,6 +204,8 @@ def test_complete_intake_runs_both_research_stages():
     ]
     assert result["market_feasibility_sources"][0]["url"] == "https://example.com/market"
     assert market_researcher.calls == 1
+    assert len(result["assumption_analysis"]["critical_assumptions"]) == 3
+    assert assumption_killer.calls == 1
 
 
 def test_missing_fields_interrupt_and_resume():
@@ -172,12 +218,13 @@ def test_missing_fields_interrupt_and_resume():
         FakeResearcher(),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     )
     first = graph.invoke({"raw_input": "idea"}, config=config())
     assert first["__interrupt__"][0].value["missing_fields"] == ["geography"]
     resumed = graph.invoke(Command(resume="Launch in Canada"), config=config())
-    assert resumed["status"] == "market_feasibility_complete"
+    assert resumed["status"] == "assumption_analysis_complete"
     assert resumed["geography"] == "Canada"
     assert extractor.calls == 2
 
@@ -189,6 +236,7 @@ def test_api_failure_is_explicit():
         FakeResearcher(),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
@@ -204,6 +252,7 @@ def test_malformed_output_is_explicit():
         FakeResearcher(),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke(
         {"raw_input": "idea"}, config=config()
@@ -218,6 +267,7 @@ def test_consumer_research_failure_is_explicit():
         FakeResearcher(ResearchFailure("search failed")),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
@@ -230,6 +280,7 @@ def test_competitor_research_failure_is_explicit():
         FakeResearcher(),
         FakeCompetitorResearcher(CompetitorResearchFailure("search failed")),
         FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
@@ -242,10 +293,53 @@ def test_market_feasibility_failure_is_explicit():
         FakeResearcher(),
         FakeCompetitorResearcher(),
         FakeMarketFeasibilityResearcher(MarketFeasibilityFailure("search failed")),
+        FakeAssumptionKiller(),
         InMemorySaver(),
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
     assert result["error_code"] == "market_feasibility_failure"
+
+
+def test_assumption_killer_failure_is_explicit():
+    result = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(AssumptionKillerFailure("analysis failed")),
+        InMemorySaver(),
+    ).invoke({"raw_input": "idea"}, config=config())
+    assert result["status"] == "error"
+    assert result["error_code"] == "assumption_killer_failure"
+
+
+def test_assumption_killer_does_not_receive_web_search_tool():
+    report = FakeAssumptionKiller().output
+
+    class FakeResponses:
+        def __init__(self):
+            self.arguments = None
+
+        def parse(self, **kwargs):
+            self.arguments = kwargs
+            return SimpleNamespace(output_parsed=report)
+
+    responses = FakeResponses()
+    client = SimpleNamespace(responses=responses)
+    result = OpenAIAssumptionKiller(client=client, model="test-model").analyze(
+        {
+            "product_idea": "idea",
+            "target_customer": "customer",
+            "geography": "place",
+            "problem": "problem",
+            "product_type": "app",
+            "consumer_research": {},
+            "competitor_research": {},
+            "market_feasibility_research": {},
+        }
+    )
+    assert result == report
+    assert "tools" not in responses.arguments
 
 
 def test_sources_traverses_objects_without_serializing_entire_response():

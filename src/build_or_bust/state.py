@@ -27,6 +27,7 @@ class BuildOrBustState(TypedDict, total=False):
     competitor_sources: list[dict[str, str]]
     market_feasibility_research: dict[str, Any] | None
     market_feasibility_sources: list[dict[str, str]]
+    assumption_analysis: dict[str, Any] | None
     status: Literal[
         "pending",
         "needs_clarification",
@@ -35,6 +36,7 @@ class BuildOrBustState(TypedDict, total=False):
         "research_complete",
         "competitor_research_complete",
         "market_feasibility_complete",
+        "assumption_analysis_complete",
         "error",
     ]
     error_code: str | None
