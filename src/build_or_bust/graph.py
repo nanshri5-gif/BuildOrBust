@@ -15,10 +15,10 @@ from .assumption_killer import (
 from .competitor_research import (
     CompetitorResearcher,
     CompetitorResearchFailure,
-    OpenAICompetitorResearcher,
+    YouMCPCompetitorResearcher,
 )
-from .consumer_research import OpenAIConsumerResearcher, Researcher, ResearchFailure
-from .extractor import ExtractionFailure, Extractor, OpenAIExtractor
+from .consumer_research import Researcher, ResearchFailure, YouMCPConsumerResearcher
+from .extractor import ExtractionFailure, Extractor, NebiusExtractor
 from .market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearcher,
@@ -215,9 +215,9 @@ def open_graph(
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
         yield build_graph(
-            extractor or OpenAIExtractor(),
-            researcher or OpenAIConsumerResearcher(),
-            competitor_researcher or OpenAICompetitorResearcher(),
+            extractor or NebiusExtractor(),
+            researcher or YouMCPConsumerResearcher(),
+            competitor_researcher or YouMCPCompetitorResearcher(),
             market_feasibility_researcher or OpenAIMarketFeasibilityResearcher(),
             assumption_killer or OpenAIAssumptionKiller(),
             SqliteSaver(connection),

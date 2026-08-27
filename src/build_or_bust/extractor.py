@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Protocol
 
@@ -27,41 +28,78 @@ class Extractor(Protocol):
     def extract(self, user_text: str) -> IntakeData: ...
 
 
-class OpenAIExtractor:
+class NebiusExtractor:
     def __init__(self, client: OpenAI | None = None, model: str | None = None):
-        self.client = client or OpenAI(max_retries=2, timeout=30.0)
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        api_key = os.getenv("NEBIUS_API_KEY")
+        self.client = client or (
+            OpenAI(
+                api_key=api_key,
+                base_url=os.getenv(
+                    "NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1/"
+                ),
+                max_retries=2,
+                timeout=30.0,
+            )
+            if api_key
+            else None
+        )
+        self.model = model or os.getenv("NEBIUS_MODEL")
 
     def extract(self, user_text: str) -> IntakeData:
+        if self.client is None or not self.model:
+            raise ExtractionFailure(
+                "nebius_configuration_failure",
+                "Set NEBIUS_API_KEY and NEBIUS_MODEL in .env before running intake.",
+            )
         try:
-            response = self.client.responses.parse(
+            response = self.client.chat.completions.create(
                 model=self.model,
-                input=[
+                messages=[
                     {
-                        "role": "developer",
+                        "role": "system",
                         "content": (
                             "Extract only facts stated or clearly implied by the user. "
-                            "Use null for anything unknown. Keep values concise."
+                            "Use null for anything unknown. Keep values concise and "
+                            "return only JSON matching the supplied schema."
                         ),
                     },
                     {"role": "user", "content": user_text},
                 ],
-                text_format=IntakeData,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "intake_data",
+                        "strict": True,
+                        "schema": IntakeData.model_json_schema(),
+                    },
+                },
             )
-            parsed = response.output_parsed
-            if parsed is None:
+            message = response.choices[0].message
+            if getattr(message, "refusal", None):
                 raise ExtractionFailure(
-                    "malformed_output", "OpenAI returned no parseable structured intake data."
+                    "model_refusal", "Nebius refused to process the intake request."
                 )
-            return parsed
+            if not message.content:
+                raise ExtractionFailure(
+                    "malformed_output", "Nebius returned no structured intake data."
+                )
+            return IntakeData.model_validate(json.loads(message.content))
         except ExtractionFailure:
             raise
+        except (IndexError, AttributeError, json.JSONDecodeError) as exc:
+            raise ExtractionFailure("malformed_output", str(exc)) from exc
         except ValidationError as exc:
             raise ExtractionFailure("malformed_output", str(exc)) from exc
         except (ValueError, TypeError) as exc:
             raise ExtractionFailure("malformed_output", str(exc)) from exc
         except openai.APIError as exc:
+            status = getattr(exc, "status_code", None)
+            body = getattr(exc, "body", None)
+            detail = body.get("detail") if isinstance(body, dict) else None
+            context = f" (HTTP {status})" if status else ""
+            if isinstance(detail, str) and detail:
+                context += f": {detail}"
             raise ExtractionFailure(
-                "openai_api_failure",
-                "The OpenAI request failed. Retry this same thread later.",
+                "nebius_api_failure",
+                f"The Nebius request failed{context}. Retry this same thread later.",
             ) from exc

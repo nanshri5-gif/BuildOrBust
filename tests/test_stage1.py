@@ -13,9 +13,16 @@ from build_or_bust.competitor_research import (
     Competitor,
     CompetitorResearch,
     CompetitorResearchFailure,
+    YouMCPCompetitorResearcher,
 )
-from build_or_bust.consumer_research import ConsumerResearch, ResearchFailure, _sources
-from build_or_bust.extractor import ExtractionFailure, IntakeData
+from build_or_bust.consumer_research import (
+    ConsumerResearch,
+    ResearchFailure,
+    SearchHit,
+    YouMCPConsumerResearcher,
+    _find_hits,
+)
+from build_or_bust.extractor import ExtractionFailure, IntakeData, NebiusExtractor
 from build_or_bust.cli import _show_sources
 from build_or_bust.graph import build_graph
 from build_or_bust.market_feasibility import (
@@ -160,7 +167,7 @@ def config(thread="test-thread"):
     return {"configurable": {"thread_id": thread}}
 
 
-def test_missing_input_does_not_call_openai():
+def test_missing_input_does_not_call_model_provider():
     extractor = FakeExtractor([])
     result = build_graph(
         extractor,
@@ -230,7 +237,7 @@ def test_missing_fields_interrupt_and_resume():
 
 
 def test_api_failure_is_explicit():
-    failure = ExtractionFailure("openai_api_failure", "request failed")
+    failure = ExtractionFailure("nebius_api_failure", "request failed")
     result = build_graph(
         FakeExtractor([failure]),
         FakeResearcher(),
@@ -242,7 +249,7 @@ def test_api_failure_is_explicit():
         {"raw_input": "idea"}, config=config()
     )
     assert result["status"] == "error"
-    assert result["error_code"] == "openai_api_failure"
+    assert result["error_code"] == "nebius_api_failure"
 
 
 def test_malformed_output_is_explicit():
@@ -259,6 +266,56 @@ def test_malformed_output_is_explicit():
     )
     assert result["status"] == "error"
     assert result["error_code"] == "malformed_output"
+
+
+def test_nebius_extractor_requests_json_schema_and_validates_response():
+    class FakeCompletions:
+        def __init__(self):
+            self.arguments = None
+
+        def create(self, **kwargs):
+            self.arguments = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=complete_data().model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    result = NebiusExtractor(client=client, model="test-model").extract("idea")
+
+    assert result == complete_data()
+    assert completions.arguments["response_format"]["type"] == "json_schema"
+    assert completions.arguments["response_format"]["json_schema"]["strict"] is True
+    assert completions.arguments["messages"][1]["content"] == "idea"
+
+
+def test_nebius_extractor_rejects_invalid_json():
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="not-json", refusal=None)
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    try:
+        NebiusExtractor(client=client, model="test-model").extract("idea")
+    except ExtractionFailure as exc:
+        assert exc.code == "malformed_output"
+    else:
+        raise AssertionError("Invalid JSON should fail intake extraction")
 
 
 def test_consumer_research_failure_is_explicit():
@@ -342,23 +399,139 @@ def test_assumption_killer_does_not_receive_web_search_tool():
     assert "tools" not in responses.arguments
 
 
-def test_sources_traverses_objects_without_serializing_entire_response():
-    response = SimpleNamespace(
-        output=[
-            SimpleNamespace(
-                action=SimpleNamespace(
-                    sources=[
-                        SimpleNamespace(title="Study", url="https://example.com/study"),
-                        SimpleNamespace(title="Duplicate", url="https://example.com/study"),
-                    ]
-                )
-            ),
-            SimpleNamespace(content="A parsed output message without an action"),
-        ]
-    )
-    assert _sources(response) == [
-        {"title": "Study", "url": "https://example.com/study"}
+def test_find_hits_accepts_nested_you_search_results():
+    payload = {
+        "results": {
+            "web": [
+                {
+                    "title": "Study",
+                    "url": "https://example.com/study",
+                    "snippets": ["Parents report planning fatigue."],
+                }
+            ]
+        }
+    }
+    assert _find_hits(payload) == [
+        SearchHit(
+            title="Study",
+            url="https://example.com/study",
+            snippets=["Parents report planning fatigue."],
+        )
     ]
+
+
+def test_consumer_research_uses_mcp_evidence_and_nebius_schema():
+    class FakeSearchClient:
+        def __init__(self):
+            self.query = None
+
+        def search(self, query):
+            self.query = query
+            return [
+                SearchHit(
+                    title="Consumer study",
+                    url="https://example.com/study",
+                    snippets=["Planning takes time."],
+                )
+            ]
+
+    class FakeCompletions:
+        def __init__(self):
+            self.arguments = None
+
+        def create(self, **kwargs):
+            self.arguments = kwargs
+            report = ConsumerResearch(
+                summary="Parents need simpler planning.",
+                pain_points=["Planning takes time"],
+                current_behaviors=["Use handwritten lists"],
+                evidence_gaps=["Willingness to pay is unknown"],
+            )
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=report.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    search_client = FakeSearchClient()
+    completions = FakeCompletions()
+    model_client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    report, sources = YouMCPConsumerResearcher(
+        search_client=search_client,
+        model_client=model_client,
+        model="test-model",
+    ).research(complete_data().model_dump())
+
+    assert "Busy parents" in search_client.query
+    assert report.pain_points == ["Planning takes time"]
+    assert sources == [
+        {"title": "Consumer study", "url": "https://example.com/study"}
+    ]
+    assert completions.arguments["response_format"]["type"] == "json_schema"
+    assert "You.com MCP evidence" in completions.arguments["messages"][1]["content"]
+
+
+def test_competitor_research_uses_mcp_search_and_page_contents():
+    class FakeEvidenceClient:
+        def __init__(self):
+            self.query = None
+            self.content_urls = []
+
+        def search(self, query):
+            self.query = query
+            return [
+                SearchHit(
+                    title="Meal App pricing",
+                    url="https://example.com/pricing",
+                    snippets=["Meal App offers weekly plans."],
+                )
+            ]
+
+        def contents(self, url):
+            self.content_urls.append(url)
+            return "# Pricing\n$5 per month"
+
+    class FakeCompletions:
+        def __init__(self):
+            self.arguments = None
+
+        def create(self, **kwargs):
+            self.arguments = kwargs
+            report = FakeCompetitorResearcher().output[0]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=report.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    evidence_client = FakeEvidenceClient()
+    completions = FakeCompletions()
+    model_client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    state = complete_data().model_dump()
+    state["consumer_research"] = {"summary": "Parents need simpler planning."}
+    report, sources = YouMCPCompetitorResearcher(
+        evidence_client=evidence_client,
+        model_client=model_client,
+        model="test-model",
+    ).research(state)
+
+    assert "competitors alternatives pricing" in evidence_client.query
+    assert evidence_client.content_urls == ["https://example.com/pricing"]
+    assert report.direct_competitors[0].name == "Meal App"
+    assert sources == [
+        {"title": "Meal App pricing", "url": "https://example.com/pricing"}
+    ]
+    prompt = completions.arguments["messages"][1]["content"]
+    assert "$5 per month" in prompt
+    assert completions.arguments["response_format"]["type"] == "json_schema"
 
 
 def test_cli_limits_displayed_sources_but_reports_remainder(capsys):

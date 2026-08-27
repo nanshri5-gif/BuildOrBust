@@ -2,9 +2,11 @@
 
 The workflow turns a raw product idea into validated shared state. If required
 facts are absent, execution pauses for a human answer and resumes from a SQLite
-checkpoint. Once intake is complete, Consumer Research, Competitor Research, and
-Market and Feasibility Research nodes use OpenAI web search to collect evidence.
+checkpoint. Once intake is complete, Consumer and Competitor Research use
+You.com tools through MCP, while Market and Feasibility Research still uses
+OpenAI web search to collect evidence.
 The Assumption Killer then challenges the idea using only those saved reports.
+Intake and clarification use Nebius Token Factory with JSON-schema output.
 
 This intentionally does not include Judge or Recommendation agents.
 
@@ -17,9 +19,12 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Put your OpenAI API key in `.env`, then run. Stages 2, 3, and 4 each perform a
-billed OpenAI web-search request after intake is complete. Stage 5 performs one
-additional structured model call without web search:
+Put your OpenAI and Nebius API keys in `.env`, and set `NEBIUS_MODEL` to a Nebius
+model marked as supporting JSON mode. Add `YDC_API_KEY` for authenticated You.com
+MCP access; without it, Consumer Research uses You.com's limited free search
+profile, but Competitor Research cannot extract full pages. Market Research
+still performs a billed OpenAI web-search request. The Assumption Killer performs
+one structured OpenAI model call:
 
 ```powershell
 build-or-bust "A mobile app that helps busy US parents plan weeknight meals"
@@ -37,9 +42,9 @@ Run `pytest` to verify the error, resume, and research paths without calling Ope
 ## Files
 
 - `state.py` defines the single shared state contract.
-- `extractor.py` calls the OpenAI Responses API with Pydantic structured output.
-- `consumer_research.py` runs focused web research and captures returned sources.
-- `competitor_research.py` researches direct competitors, alternatives, and pricing.
+- `extractor.py` calls Nebius chat completions and validates JSON with Pydantic.
+- `consumer_research.py` calls You.com through MCP, then uses Nebius to validate a focused consumer report.
+- `competitor_research.py` uses MCP search and page extraction for competitors and pricing.
 - `market_feasibility.py` researches demand signals and implementation feasibility.
 - `assumption_killer.py` challenges critical assumptions using saved evidence only.
 - `graph.py` routes intake, clarification, research, and assumption analysis.
