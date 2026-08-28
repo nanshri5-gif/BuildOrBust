@@ -30,6 +30,7 @@ class BuildOrBustState(TypedDict, total=False):
     evidence_assessment: dict[str, Any] | None
     assumption_analysis: dict[str, Any] | None
     judgment: dict[str, Any] | None
+    recommendation: dict[str, Any] | None
     status: Literal[
         "pending",
         "needs_clarification",
@@ -42,6 +43,7 @@ class BuildOrBustState(TypedDict, total=False):
         "insufficient_evidence",
         "assumption_analysis_complete",
         "judgment_complete",
+        "recommendation_complete",
         "error",
     ]
     error_code: str | None

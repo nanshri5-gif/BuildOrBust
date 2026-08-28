@@ -11,6 +11,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .state import BuildOrBustState
+from .search_query import bounded_query
 
 
 class ConsumerResearch(BaseModel):
@@ -106,7 +107,7 @@ class YouMCPClient:
             raise ResearchFailure(f"You.com MCP connection or tool failure: {exc}") from exc
 
     async def _contents(self, url: str) -> str:
-        result = await self._call_tool("you-contents", {"url": url})
+        result = await self._call_tool("you-contents", {"urls": [url]})
         text = "".join(block.text for block in result.content if hasattr(block, "text"))
         if not text.strip():
             raise ResearchFailure("You.com MCP returned empty page content.")
@@ -253,9 +254,11 @@ class YouMCPConsumerResearcher:
         self.model = model or os.getenv("NEBIUS_MODEL")
 
     def research(self, state: BuildOrBustState) -> tuple[ConsumerResearch, list[dict[str, str]]]:
-        query = (
-            f"{state['target_customer']} {state['geography']} "
-            f"{state['problem']} pain points current behavior research"
+        query = bounded_query(
+            state.get("target_customer"),
+            state.get("geography"),
+            state.get("problem"),
+            "pain points current behavior research",
         )
         hits = self.search_client.search(query)
         if self.model_client is None or not self.model:

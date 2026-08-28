@@ -59,7 +59,9 @@ class NebiusExtractor:
                         "role": "system",
                         "content": (
                             "Extract only facts stated or clearly implied by the user. "
-                            "Use null for anything unknown. Keep values concise and "
+                            "Use null for anything unknown. Do not invent features. Keep "
+                            "product_type to a category of at most eight words (for example, "
+                            "mobile app or physical consumer product). Keep all values concise and "
                             "return only JSON matching the supplied schema."
                         ),
                     },

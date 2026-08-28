@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .consumer_research import SearchHit, YouMCPClient
 from .state import BuildOrBustState
+from .search_query import bounded_query
 
 
 class Competitor(BaseModel):
@@ -72,9 +73,13 @@ class YouMCPCompetitorResearcher:
     def research(
         self, state: BuildOrBustState
     ) -> tuple[CompetitorResearch, list[dict[str, Any]]]:
-        query = (
-            f"{state['product_type']} competitors alternatives pricing for "
-            f"{state['target_customer']} {state['geography']} {state['problem']}"
+        query = bounded_query(
+            state.get("product_idea"),
+            state.get("product_type"),
+            "competitors alternatives pricing",
+            state.get("target_customer"),
+            state.get("geography"),
+            state.get("problem"),
         )
         try:
             hits = self.evidence_client.search(query)

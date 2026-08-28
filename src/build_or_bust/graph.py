@@ -26,6 +26,11 @@ from .market_feasibility import (
     MarketFeasibilityResearcher,
     YouMCPMarketFeasibilityResearcher,
 )
+from .recommendation import (
+    NebiusRecommendationAgent,
+    RecommendationAgent,
+    RecommendationFailure,
+)
 from .state import BuildOrBustState, REQUIRED_FIELDS
 
 
@@ -43,6 +48,7 @@ def build_graph(
     assumption_killer: AssumptionKiller,
     judge: Judge,
     checkpointer: Any,
+    recommendation_agent: RecommendationAgent | None = None,
     evidence_gate: EvidenceGate | None = None,
 ):
     gate = evidence_gate or EvidenceGate()
@@ -213,6 +219,24 @@ def build_graph(
             return "judge"
         return "done"
 
+    def recommendation(state: BuildOrBustState) -> dict[str, Any]:
+        if recommendation_agent is None:
+            raise RuntimeError("Recommendation node requires a recommendation agent.")
+        try:
+            result = recommendation_agent.recommend(state)
+        except RecommendationFailure as exc:
+            return {
+                "status": "error",
+                "error_code": exc.code,
+                "error_message": str(exc),
+            }
+        return {
+            "recommendation": result.model_dump(),
+            "status": "recommendation_complete",
+            "error_code": None,
+            "error_message": None,
+        }
+
     builder = StateGraph(BuildOrBustState)
     builder.add_node("intake", intake)
     builder.add_node("clarify", clarify)
@@ -222,6 +246,8 @@ def build_graph(
     builder.add_node("evidence_gate", assess_evidence)
     builder.add_node("assumption_analysis", assumption_analysis)
     builder.add_node("judgment", judgment)
+    if recommendation_agent is not None:
+        builder.add_node("recommendation", recommendation)
     builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
@@ -254,7 +280,11 @@ def build_graph(
         route_after_assumption_analysis,
         {"judge": "judgment", "done": END},
     )
-    builder.add_edge("judgment", END)
+    if recommendation_agent is not None:
+        builder.add_edge("judgment", "recommendation")
+        builder.add_edge("recommendation", END)
+    else:
+        builder.add_edge("judgment", END)
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -267,6 +297,7 @@ def open_graph(
     market_feasibility_researcher: MarketFeasibilityResearcher | None = None,
     assumption_killer: AssumptionKiller | None = None,
     judge: Judge | None = None,
+    recommendation_agent: RecommendationAgent | None = None,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -278,6 +309,7 @@ def open_graph(
             assumption_killer or NebiusAssumptionKiller(),
             judge or NebiusJudge(),
             SqliteSaver(connection),
+            recommendation_agent=recommendation_agent or NebiusRecommendationAgent(),
         )
     finally:
         connection.close()

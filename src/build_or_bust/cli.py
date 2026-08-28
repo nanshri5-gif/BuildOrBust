@@ -144,11 +144,40 @@ def _show(result: dict) -> None:
             for criterion in judgment["decision_criteria"]:
                 print(f"    - [{criterion['status'].upper()}] {criterion['criterion']}")
                 print(f"      Evidence: {criterion['evidence']}")
+        recommendation = result.get("recommendation")
+        if recommendation:
+            print("\nRecommendation:")
+            print(f"  Decision preserved: {recommendation['decision']}")
+            print(f"  Direction: {recommendation['recommended_direction']}")
+            print("  Next actions:")
+            for number, action in enumerate(recommendation["next_actions"], start=1):
+                print(f"    {number}. {action['action']}")
+                print(f"       Purpose: {action['purpose']}")
+                print(f"       Done when: {action['completion_criterion']}")
+            if recommendation["validation_experiments"]:
+                print("  Validation experiments:")
+                for experiment in recommendation["validation_experiments"]:
+                    print(f"    - Hypothesis: {experiment['hypothesis']}")
+                    print(f"      Method: {experiment['method']}")
+                    print(f"      Success: {experiment['success_criterion']}")
+                    print(f"      Failure: {experiment['failure_signal']}")
+            sections = (
+                ("Build now", "build_now"),
+                ("Do not build yet", "do_not_build_yet"),
+                ("Evidence used", "evidence_used"),
+                ("Unresolved questions", "unresolved_questions"),
+                ("Human review questions", "human_review_questions"),
+            )
+            for label, key in sections:
+                if recommendation[key]:
+                    print(f"  {label}:")
+                    for item in recommendation[key]:
+                        print(f"    - {item}")
 
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–6")
+    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–7")
     parser.add_argument("idea", nargs="?", help="Product idea to normalize")
     parser.add_argument("--thread", default=str(uuid.uuid4()), help="Persistent run ID")
     parser.add_argument("--resume", help="Answer a saved clarification question")

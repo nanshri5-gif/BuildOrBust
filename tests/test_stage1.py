@@ -19,6 +19,7 @@ from build_or_bust.consumer_research import (
     ConsumerResearch,
     ResearchFailure,
     SearchHit,
+    YouMCPClient,
     YouMCPConsumerResearcher,
     _find_hits,
 )
@@ -36,6 +37,14 @@ from build_or_bust.market_feasibility import (
     MarketFeasibilityResearch,
     YouMCPMarketFeasibilityResearcher,
 )
+from build_or_bust.recommendation import (
+    NebiusRecommendationAgent,
+    Recommendation,
+    RecommendationFailure,
+    RecommendedAction,
+    ValidationExperiment,
+)
+from build_or_bust.search_query import bounded_query
 
 
 class FakeExtractor:
@@ -212,6 +221,41 @@ class FakeJudge:
         return self.output
 
 
+class FakeRecommendationAgent:
+    def __init__(self, output=None):
+        self.output = output or Recommendation(
+            decision="VALIDATE",
+            recommended_direction="Validate demand before building the product.",
+            next_actions=[
+                RecommendedAction(
+                    action="Interview target parents",
+                    purpose="Test the severity and frequency of the problem",
+                    completion_criterion="Complete 10 structured interviews",
+                )
+            ],
+            validation_experiments=[
+                ValidationExperiment(
+                    hypothesis="Parents will repeatedly use an automated weekly plan",
+                    method="Run a two-week concierge meal-planning trial",
+                    success_criterion="At least 7 of 10 families use both weekly plans",
+                    failure_signal="Fewer than 4 families use the second weekly plan",
+                )
+            ],
+            build_now=["A manual concierge trial and simple signup page"],
+            do_not_build_yet=["A full mobile application"],
+            evidence_used=["Consumer research shows recurring planning burden"],
+            unresolved_questions=["Willingness to pay remains unknown"],
+            human_review_questions=["What budget is available for validation?"],
+        )
+        self.calls = 0
+
+    def recommend(self, state):
+        self.calls += 1
+        if isinstance(self.output, Exception):
+            raise self.output
+        return self.output
+
+
 def complete_data(**changes):
     values = {
         "product_idea": "A meal-planning app",
@@ -226,6 +270,13 @@ def complete_data(**changes):
 
 def config(thread="test-thread"):
     return {"configurable": {"thread_id": thread}}
+
+
+def test_search_query_is_normalized_and_bounded():
+    query = bounded_query("  physical   product ", "feature " * 200)
+    assert len(query) <= 500
+    assert "  " not in query
+    assert not query.endswith(" ")
 
 
 def test_missing_input_does_not_call_model_provider():
@@ -251,6 +302,7 @@ def test_complete_flow_reaches_judgment():
     market_researcher = FakeMarketFeasibilityResearcher()
     assumption_killer = FakeAssumptionKiller()
     judge = FakeJudge()
+    recommendation_agent = FakeRecommendationAgent()
     result = build_graph(
         FakeExtractor([complete_data()]),
         researcher,
@@ -259,10 +311,11 @@ def test_complete_flow_reaches_judgment():
         assumption_killer,
         judge,
         InMemorySaver(),
+        recommendation_agent=recommendation_agent,
     ).invoke(
         {"raw_input": "idea"}, config=config()
     )
-    assert result["status"] == "judgment_complete"
+    assert result["status"] == "recommendation_complete"
     assert result["missing_fields"] == []
     assert result["consumer_research"]["pain_points"] == ["Planning takes time"]
     assert result["research_sources"][0]["url"] == "https://example.com/study"
@@ -280,6 +333,8 @@ def test_complete_flow_reaches_judgment():
     assert result["judgment"]["decision"] == "VALIDATE"
     assert judge.calls == 1
     assert result["evidence_assessment"]["sufficient"] is True
+    assert result["recommendation"]["decision"] == "VALIDATE"
+    assert recommendation_agent.calls == 1
 
 
 def test_weak_evidence_stops_before_assumption_killer_and_judge():
@@ -290,6 +345,7 @@ def test_weak_evidence_stops_before_assumption_killer_and_judge():
     )
     assumption_killer = FakeAssumptionKiller()
     judge = FakeJudge()
+    recommendation_agent = FakeRecommendationAgent()
 
     result = build_graph(
         FakeExtractor([complete_data()]),
@@ -299,6 +355,7 @@ def test_weak_evidence_stops_before_assumption_killer_and_judge():
         assumption_killer,
         judge,
         InMemorySaver(),
+        recommendation_agent=recommendation_agent,
     ).invoke({"raw_input": "idea"}, config=config("weak-evidence"))
 
     assert result["status"] == "insufficient_evidence"
@@ -309,6 +366,7 @@ def test_weak_evidence_stops_before_assumption_killer_and_judge():
     )
     assert assumption_killer.calls == 0
     assert judge.calls == 0
+    assert recommendation_agent.calls == 0
 
 
 def test_missing_fields_interrupt_and_resume():
@@ -487,6 +545,80 @@ def test_judge_failure_is_explicit():
     ).invoke({"raw_input": "idea"}, config=config())
     assert result["status"] == "error"
     assert result["error_code"] == "judge_failure"
+
+
+def test_recommendation_failure_is_explicit():
+    result = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(
+            RecommendationFailure("recommendation failed")
+        ),
+    ).invoke({"raw_input": "idea"}, config=config("recommendation-failure"))
+    assert result["status"] == "error"
+    assert result["error_code"] == "recommendation_failure"
+
+
+def test_nebius_recommendation_preserves_judges_decision_and_uses_no_tools():
+    recommendation = FakeRecommendationAgent().output
+
+    class FakeCompletions:
+        def __init__(self):
+            self.arguments = None
+
+        def create(self, **kwargs):
+            self.arguments = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=recommendation.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    result = NebiusRecommendationAgent(client=client, model="test-model").recommend(
+        {"judgment": FakeJudge().output.model_dump()}
+    )
+    assert result == recommendation
+    assert "tools" not in completions.arguments
+    assert completions.arguments["response_format"]["type"] == "json_schema"
+    assert completions.arguments["response_format"]["json_schema"]["strict"] is True
+
+
+def test_nebius_recommendation_rejects_changed_decision():
+    changed = FakeRecommendationAgent().output.model_copy(update={"decision": "BUILD"})
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=changed.model_dump_json(), refusal=None
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+    try:
+        NebiusRecommendationAgent(client=client, model="test-model").recommend(
+            {"judgment": FakeJudge().output.model_dump()}
+        )
+    except RecommendationFailure as exc:
+        assert exc.code == "decision_mismatch"
+    else:
+        raise AssertionError("Recommendation must not change the Judge's decision")
 
 
 def test_nebius_judge_uses_schema_without_tools():
@@ -749,6 +881,27 @@ def test_competitor_research_uses_mcp_search_and_page_contents():
     prompt = completions.arguments["messages"][1]["content"]
     assert "$5 per month" in prompt
     assert completions.arguments["response_format"]["type"] == "json_schema"
+
+
+def test_you_contents_sends_urls_as_an_array():
+    client = YouMCPClient(api_key="test-key")
+    captured = {}
+
+    async def fake_call_tool(name, arguments):
+        captured["name"] = name
+        captured["arguments"] = arguments
+        return SimpleNamespace(
+            content=[SimpleNamespace(text='{"content": "extracted page"}')]
+        )
+
+    client._call_tool = fake_call_tool
+    result = client.contents("https://example.com/page")
+
+    assert result == "extracted page"
+    assert captured == {
+        "name": "you-contents",
+        "arguments": {"urls": ["https://example.com/page"]},
+    }
 
 
 def test_market_research_uses_mcp_structured_research():

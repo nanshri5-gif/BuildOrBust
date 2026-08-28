@@ -1,4 +1,4 @@
-# Build or Bust — Stages 1–6
+# Build or Bust — Stages 1–7
 
 The workflow turns a raw product idea into validated shared state. If required
 facts are absent, execution pauses for a human answer and resumes from a SQLite
@@ -11,8 +11,10 @@ as a `VALIDATE` decision. The Assumption Killer then challenges sufficiently
 supported ideas using only the saved reports.
 Intake and clarification use Nebius Token Factory with JSON-schema output.
 The Judge evaluates the saved evidence and returns BUILD, VALIDATE, PIVOT, or BUST.
+The Recommendation Agent preserves that decision and converts it into constrained,
+measurable next actions for human review.
 
-This intentionally does not include a Recommendation agent.
+The workflow stops after producing the recommendation; a human makes the final call.
 
 ## Setup
 
@@ -52,6 +54,7 @@ Run `pytest` to verify the error, resume, and research paths without calling liv
 - `evidence_gate.py` makes the deterministic answerability decision before generation.
 - `assumption_killer.py` uses Nebius to challenge assumptions from saved evidence only.
 - `judge.py` uses Nebius to make one evidence-grounded decision without new research.
-- `graph.py` routes intake, clarification, research, the evidence gate, assumption analysis, and judgment.
+- `recommendation.py` converts the saved decision into experiments and scoped next actions.
+- `graph.py` routes intake, clarification, research, the evidence gate, assumption analysis, judgment, and recommendation.
 - `cli.py` starts or resumes a run.
-- `tests/test_stage1.py` covers all six stages with fake API collaborators.
+- `tests/test_stage1.py` covers all seven stages with fake API collaborators.
