@@ -48,7 +48,7 @@ from build_or_bust.recommendation import (
 )
 from build_or_bust.search_query import bounded_query
 from build_or_bust.dashboard import confidence_chart_data
-from build_or_bust.ui import checkpoint_result
+from build_or_bust.ui import checkpoint_result, public_demo_mode
 
 
 class FakeExtractor:
@@ -327,6 +327,16 @@ def test_checkpoint_result_restores_pending_interrupts():
     result = checkpoint_result(snapshot)
     assert result["status"] == "needs_clarification"
     assert result["__interrupt__"] == (pending,)
+
+
+def test_public_demo_mode_reads_truthy_environment_values(monkeypatch):
+    monkeypatch.setenv("PUBLIC_DEMO_MODE", "true")
+    assert public_demo_mode() is True
+
+
+def test_public_demo_mode_defaults_to_disabled(monkeypatch):
+    monkeypatch.delenv("PUBLIC_DEMO_MODE", raising=False)
+    assert public_demo_mode() is False
 
 
 def test_missing_input_does_not_call_model_provider():

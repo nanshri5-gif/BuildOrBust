@@ -498,9 +498,13 @@ def open_graph(
     judge: Judge | None = None,
     recommendation_agent: RecommendationAgent | None = None,
     idea_registry: IdeaRegistry | None = None,
+    enable_idea_registry: bool = True,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
+        registry = idea_registry
+        if registry is None and enable_idea_registry:
+            registry = SQLiteIdeaRegistry(db_path)
         yield build_graph(
             extractor or NebiusExtractor(),
             researcher or YouMCPConsumerResearcher(),
@@ -510,7 +514,7 @@ def open_graph(
             judge or NebiusJudge(),
             SqliteSaver(connection),
             recommendation_agent=recommendation_agent or NebiusRecommendationAgent(),
-            idea_registry=idea_registry or SQLiteIdeaRegistry(db_path),
+            idea_registry=registry,
         )
     finally:
         connection.close()

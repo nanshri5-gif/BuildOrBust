@@ -80,6 +80,32 @@ After submission, the page URL contains the LangGraph thread ID. Reopening a URL
 such as `http://localhost:8501/?thread=THREAD_ID` restores the saved checkpoint,
 including pending interrupts, without rerunning research APIs.
 
+## Public cohort demo
+
+The repository is ready for Streamlit Community Cloud. Public-demo mode hides the
+shared evaluation-history sidebar and disables cross-visitor idea lookup and reuse.
+LangGraph thread checkpoints remain available while the deployed instance is running,
+but Community Cloud does not guarantee that the local SQLite file will survive an app
+restart or redeploy.
+
+1. Push this repository to GitHub.
+2. Sign in at `https://share.streamlit.io` and create an app from the repository.
+3. Set the entrypoint to `src/build_or_bust/ui.py` and select Python 3.13.
+4. Open Advanced settings and paste secrets using
+   `.streamlit/secrets.toml.example` as the template. Replace both API-key placeholders.
+5. Deploy and share the resulting `streamlit.app` URL.
+
+Do not commit `.env` or `.streamlit/secrets.toml`. Both are ignored by Git. Configure
+Nebius and You.com spending or request limits before sharing the public URL because
+each new evaluation makes paid external API calls. For durable checkpoints and history,
+replace local SQLite with a hosted database before treating this as a production app.
+
+To preview the public behavior locally, add this to `.env` and restart Streamlit:
+
+```text
+PUBLIC_DEMO_MODE=true
+```
+
 ## Files
 
 - `state.py` defines the single shared state contract.

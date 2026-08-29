@@ -14,6 +14,15 @@ from build_or_bust.graph import open_graph
 from build_or_bust.idea_registry import SQLiteIdeaRegistry
 
 
+def public_demo_mode() -> bool:
+    return os.getenv("PUBLIC_DEMO_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def apply_app_style() -> None:
     st.markdown(
         """
@@ -442,7 +451,10 @@ def apply_app_style() -> None:
 
 def run_graph(request: dict[str, Any] | Command, thread_id: str) -> dict[str, Any]:
     config = {"configurable": {"thread_id": thread_id}}
-    with open_graph(os.getenv("CHECKPOINT_DB", "build_or_bust.db")) as graph:
+    with open_graph(
+        os.getenv("CHECKPOINT_DB", "build_or_bust.db"),
+        enable_idea_registry=not public_demo_mode(),
+    ) as graph:
         return graph.invoke(request, config=config)
 
 
@@ -460,7 +472,10 @@ def checkpoint_result(snapshot: Any) -> dict[str, Any]:
 
 def load_checkpoint(thread_id: str) -> dict[str, Any] | None:
     config = {"configurable": {"thread_id": thread_id}}
-    with open_graph(os.getenv("CHECKPOINT_DB", "build_or_bust.db")) as graph:
+    with open_graph(
+        os.getenv("CHECKPOINT_DB", "build_or_bust.db"),
+        enable_idea_registry=not public_demo_mode(),
+    ) as graph:
         snapshot = graph.get_state(config)
     if not snapshot.values:
         return None
@@ -860,6 +875,11 @@ def main() -> None:
     load_dotenv()
     st.set_page_config(page_title="Build or Bust", page_icon="🔎", layout="wide")
     apply_app_style()
+    if public_demo_mode():
+        st.markdown(
+            "<style>[data-testid='stSidebar']{display:none !important;}</style>",
+            unsafe_allow_html=True,
+        )
     st.markdown(
         "<div class='app-title'>Build or Bust</div>"
         "<div class='app-subtitle'>Turn a product idea into an evidence-backed "
