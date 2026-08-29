@@ -345,10 +345,8 @@ def build_graph(
         response = interrupt(
             {
                 "kind": "human_review",
-                "question": "Review the recommendation: approve, revise, or reject?",
-                "choices": ["approve", "revise", "reject"],
-                "revision_count": state.get("recommendation_revision_count", 0),
-                "max_revisions": 2,
+                "question": "Review the recommendation: approve or reject?",
+                "choices": ["approve", "reject"],
             }
         )
         if not isinstance(response, dict):
@@ -359,56 +357,31 @@ def build_graph(
             }
         action = str(response.get("action") or "").strip().lower()
         notes = str(response.get("notes") or "").strip()
-        if action not in {"approve", "revise", "reject"}:
+        if action not in {"approve", "reject"}:
             return {
                 "status": "error",
                 "error_code": "invalid_review_response",
-                "error_message": "Review action must be approve, revise, or reject.",
+                "error_message": "Review action must be approve or reject.",
             }
-        revision_count = state.get("recommendation_revision_count", 0)
         history = [
             *state.get("review_history", []),
             {
                 "action": action,
                 "notes": notes,
-                "revision_count": revision_count,
+                "revision_count": 0,
                 "reviewed_at": datetime.now(UTC).isoformat(),
             },
         ]
-        if action == "revise":
-            if not notes:
-                return {
-                    "status": "error",
-                    "error_code": "review_feedback_required",
-                    "error_message": "Revision feedback cannot be empty.",
-                }
-            if revision_count >= 2:
-                return {
-                    "status": "error",
-                    "error_code": "revision_limit_reached",
-                    "error_message": "The recommendation revision limit has been reached.",
-                    "review_history": history,
-                }
-            return {
-                "status": "revision_requested",
-                "review_action": action,
-                "review_notes": notes,
-                "review_feedback": notes,
-                "recommendation_revision_count": revision_count + 1,
-                "review_history": history,
-            }
         return {
             "status": "review_complete",
             "review_action": action,
             "review_notes": notes,
             "review_feedback": None,
-            "recommendation_revision_count": revision_count,
+            "recommendation_revision_count": 0,
             "review_history": history,
         }
 
     def route_after_human_review(state: BuildOrBustState) -> str:
-        if state.get("status") == "revision_requested":
-            return "revise"
         if state.get("status") == "review_complete" and idea_registry is not None:
             return "persist"
         return "done"
@@ -504,7 +477,6 @@ def build_graph(
             "human_review",
             route_after_human_review,
             {
-                "revise": "recommendation",
                 "persist": "persist_evaluation" if idea_registry is not None else END,
                 "done": END,
             },

@@ -180,7 +180,6 @@ def _show(result: dict) -> None:
             print("\nHuman review complete:")
             print(f"  Action: {result['review_action'].upper()}")
             print(f"  Notes: {result.get('review_notes') or 'None'}")
-            print(f"  Recommendation revisions: {result.get('recommendation_revision_count', 0)}")
             if result.get("evaluation_saved"):
                 print(f"  Saved evaluation ID: {result.get('evaluation_id')}")
         if result.get("status") == "evaluation_reused":
@@ -207,12 +206,12 @@ def main() -> None:
     resume_options = parser.add_mutually_exclusive_group()
     resume_options.add_argument("--resume", help="Answer a saved clarification question")
     resume_options.add_argument(
-        "--review", choices=("approve", "revise", "reject"), help="Resume human review"
+        "--review", choices=("approve", "reject"), help="Resume human review"
     )
     resume_options.add_argument(
         "--prior", choices=("reuse", "refresh"), help="Reuse or refresh a prior evaluation"
     )
-    parser.add_argument("--notes", default="", help="Human-review notes or revision feedback")
+    parser.add_argument("--notes", default="", help="Optional human-review notes")
     parser.add_argument(
         "--show", action="store_true", help="Display saved state without running the graph"
     )

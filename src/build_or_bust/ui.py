@@ -908,17 +908,14 @@ def show_interrupt(result: dict[str, Any]) -> None:
             st.rerun()
     elif kind == "human_review":
         with st.form("human_review"):
-            action = st.radio("Decision", ["approve", "revise", "reject"], horizontal=True)
+            action = st.radio("Decision", ["approve", "reject"], horizontal=True)
             notes = st.text_area(
                 "Notes",
-                placeholder="Revision feedback is required when choosing revise.",
+                placeholder="Optional notes for the evaluation record.",
             )
             if st.form_submit_button("Submit review", type="primary"):
-                if action == "revise" and not notes.strip():
-                    st.error("Please provide revision feedback.")
-                else:
-                    resume(action, notes)
-                    st.rerun()
+                resume(action, notes)
+                st.rerun()
     else:
         with st.form("clarification"):
             answer = st.text_area("Your clarification")

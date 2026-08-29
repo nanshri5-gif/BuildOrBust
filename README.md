@@ -21,7 +21,7 @@ You.com MCP tools, and SQLite.
 - Challenges consequential assumptions using only collected evidence.
 - Returns one explicit decision: `BUILD`, `VALIDATE`, `PIVOT`, or `BUST`.
 - Generates recommended actions and validation experiments.
-- Pauses for human approval, revision, or rejection.
+- Pauses for human approval or rejection.
 - Saves checkpoints so interrupted evaluations can resume without restarting.
 - Reuses recent completed evaluations when the normalized idea matches.
 
@@ -107,7 +107,7 @@ Open `http://localhost:8501` and submit a product idea. The result page includes
 - decision criteria and evidence-readiness gauges;
 - expandable consumer, competitor, and market research;
 - recommendation and validation-experiment cards; and
-- approve, revise, or reject human review.
+- approve or reject human review.
 
 The URL contains the LangGraph thread ID after an evaluation starts. Reopening
 `http://localhost:8501/?thread=THREAD_ID` restores the checkpoint without repeating
@@ -131,7 +131,6 @@ Submit human review:
 
 ```powershell
 build-or-bust --thread YOUR_THREAD_ID --review approve --notes "Proceed"
-build-or-bust --thread YOUR_THREAD_ID --review revise --notes "Use a cheaper one-week test"
 build-or-bust --thread YOUR_THREAD_ID --review reject --notes "Risk is too high"
 ```
 

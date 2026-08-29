@@ -510,7 +510,6 @@ def test_complete_flow_pauses_for_review_and_can_be_approved():
     first = graph.invoke({"raw_input": "idea"}, config=config())
     assert first["__interrupt__"][0].value["choices"] == [
         "approve",
-        "revise",
         "reject",
     ]
     result = graph.invoke(
@@ -541,48 +540,7 @@ def test_complete_flow_pauses_for_review_and_can_be_approved():
     assert result["review_notes"] == "Proceed with validation"
 
 
-def test_review_revision_regenerates_only_recommendation_then_pauses_again():
-    recommendation_agent = FakeRecommendationAgent()
-    graph = build_graph(
-        FakeExtractor([complete_data()]),
-        FakeResearcher(),
-        FakeCompetitorResearcher(),
-        FakeMarketFeasibilityResearcher(),
-        FakeAssumptionKiller(),
-        FakeJudge(),
-        InMemorySaver(),
-        recommendation_agent=recommendation_agent,
-    )
-    review_config = config("revise-recommendation")
-    graph.invoke({"raw_input": "idea"}, config=review_config)
-    revised = graph.invoke(
-        Command(
-            resume={
-                "action": "revise",
-                "notes": "Make the first experiment cheaper and one week long.",
-            }
-        ),
-        config=review_config,
-    )
-
-    assert revised["__interrupt__"]
-    assert recommendation_agent.calls == 2
-    assert recommendation_agent.states[1]["review_feedback"] == (
-        "Make the first experiment cheaper and one week long."
-    )
-    approved = graph.invoke(
-        Command(resume={"action": "approve", "notes": "Revision accepted"}),
-        config=review_config,
-    )
-    assert approved["status"] == "review_complete"
-    assert approved["recommendation_revision_count"] == 1
-    assert [item["action"] for item in approved["review_history"]] == [
-        "revise",
-        "approve",
-    ]
-
-
-def test_review_revision_limit_stops_the_loop():
+def test_human_review_can_reject_with_optional_notes():
     graph = build_graph(
         FakeExtractor([complete_data()]),
         FakeResearcher(),
@@ -593,19 +551,40 @@ def test_review_revision_limit_stops_the_loop():
         InMemorySaver(),
         recommendation_agent=FakeRecommendationAgent(),
     )
-    review_config = config("revision-limit")
+    review_config = config("reject-recommendation")
     graph.invoke({"raw_input": "idea"}, config=review_config)
-    for number in range(2):
-        graph.invoke(
-            Command(resume={"action": "revise", "notes": f"Revision {number}"}),
-            config=review_config,
-        )
-    stopped = graph.invoke(
-        Command(resume={"action": "revise", "notes": "One more revision"}),
+    rejected = graph.invoke(
+        Command(resume={"action": "reject", "notes": "Risk is too high."}),
         config=review_config,
     )
-    assert stopped["status"] == "error"
-    assert stopped["error_code"] == "revision_limit_reached"
+
+    assert rejected["status"] == "review_complete"
+    assert rejected["review_action"] == "reject"
+    assert rejected["review_notes"] == "Risk is too high."
+    assert [item["action"] for item in rejected["review_history"]] == ["reject"]
+
+
+def test_human_review_rejects_removed_revise_action():
+    graph = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+    )
+    review_config = config("invalid-revise")
+    graph.invoke({"raw_input": "idea"}, config=review_config)
+    result = graph.invoke(
+        Command(resume={"action": "revise", "notes": "Try again"}),
+        config=review_config,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "invalid_review_response"
+    assert result["error_message"] == "Review action must be approve or reject."
 
 
 def test_approved_evaluation_can_be_reused_without_research(tmp_path):

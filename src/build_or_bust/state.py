@@ -32,7 +32,7 @@ class BuildOrBustState(TypedDict, total=False):
     assumption_analysis: dict[str, Any] | None
     judgment: dict[str, Any] | None
     recommendation: dict[str, Any] | None
-    review_action: Literal["approve", "revise", "reject"] | None
+    review_action: Literal["approve", "reject"] | None
     review_notes: str | None
     review_feedback: str | None
     recommendation_revision_count: int
@@ -60,7 +60,6 @@ class BuildOrBustState(TypedDict, total=False):
         "assumption_analysis_complete",
         "judgment_complete",
         "recommendation_complete",
-        "revision_requested",
         "review_complete",
         "error",
     ]
