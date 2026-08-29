@@ -48,7 +48,7 @@ from build_or_bust.recommendation import (
 )
 from build_or_bust.search_query import bounded_query
 from build_or_bust.dashboard import confidence_chart_data
-from build_or_bust.ui import checkpoint_result, public_demo_mode
+from build_or_bust.ui import checkpoint_result, public_demo_mode, recommendation_label
 
 
 class FakeExtractor:
@@ -283,6 +283,22 @@ def test_search_query_is_normalized_and_bounded():
     assert len(query) <= 500
     assert "  " not in query
     assert not query.endswith(" ")
+
+
+def test_recommendation_label_is_short_and_escapes_markdown_math():
+    action = (
+        "Survey travelers at $300, $500, and $700 to validate the core_assumption "
+        "with a very long description that should stay inside the expanded card."
+    )
+
+    label = recommendation_label(1, action)
+
+    assert label.startswith("1. ")
+    assert label.endswith(" · Not started")
+    assert "\\$" in label
+    assert "core\\_assumption" in label
+    assert "…" in label
+    assert len(label) < len(action)
 
 
 def test_confidence_chart_keeps_evidence_readiness_separate_from_judge_confidence():

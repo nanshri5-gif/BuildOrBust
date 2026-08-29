@@ -559,10 +559,29 @@ def show_research(report: dict[str, Any], sources: list[dict]) -> None:
             show_sources(sources)
 
 
+def recommendation_label(number: int, action: str, max_chars: int = 88) -> str:
+    """Return a compact expander label without triggering Markdown math."""
+
+    title = " ".join(str(action).split())
+    first_sentence = title.split(". ", 1)[0]
+    if len(first_sentence) > max_chars:
+        shortened = first_sentence[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.;:-")
+        first_sentence = f"{shortened or first_sentence[:max_chars]}…"
+    escaped = (
+        first_sentence.replace("\\", "\\\\")
+        .replace("$", "\\$")
+        .replace("_", "\\_")
+        .replace("*", "\\*")
+    )
+    return f"{number}. {escaped} · Not started"
+
+
 def show_recommendation(recommendation: dict[str, Any]) -> None:
     for number, action in enumerate(recommendation["next_actions"], start=1):
-        label = f"{number}.  {action['action']}   ·   Not started"
+        full_action = str(action["action"])
+        label = recommendation_label(number, full_action)
         with st.expander(label, expanded=False):
+            st.write(full_action)
             purpose = html.escape(str(action["purpose"]))
             completion = html.escape(str(action["completion_criterion"]))
             st.markdown(
