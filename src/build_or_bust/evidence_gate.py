@@ -77,7 +77,9 @@ class EvidenceGate:
         coverage = {
             "consumer_pain_points": bool(consumer.get("pain_points")),
             "consumer_current_behaviors": bool(consumer.get("current_behaviors")),
-            "direct_competitors": bool(competitor.get("direct_competitors")),
+            # An empty direct-competitor list is a valid researched outcome. The
+            # report's presence proves the competitor node completed successfully.
+            "competitor_search_completed": state.get("competitor_research") is not None,
             "existing_alternatives": bool(competitor.get("alternatives")),
             "market_demand_signals": bool(market.get("demand_signals")),
             "market_proxies": bool(market.get("market_proxies")),

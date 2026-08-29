@@ -22,7 +22,7 @@ def confidence_chart_data(state: dict[str, Any]) -> list[dict[str, float | str]]
     ) / 2
     competitor_coverage = sum(
         bool(coverage.get(key))
-        for key in ("direct_competitors", "existing_alternatives")
+        for key in ("competitor_search_completed", "existing_alternatives")
     ) / 2
     market_keys = (
         "market_demand_signals",

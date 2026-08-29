@@ -25,7 +25,8 @@ class CompetitorResearch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     summary: str
-    direct_competitors: list[Competitor] = Field(min_length=1, max_length=5)
+    # A completed search may legitimately find no direct competitor for a novel idea.
+    direct_competitors: list[Competitor] = Field(default_factory=list, max_length=5)
     alternatives: list[str] = Field(min_length=1, max_length=5)
     differentiation_gaps: list[str] = Field(default_factory=list, max_length=5)
     evidence_gaps: list[str] = Field(default_factory=list, max_length=5)

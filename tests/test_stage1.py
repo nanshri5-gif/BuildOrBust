@@ -48,6 +48,7 @@ from build_or_bust.recommendation import (
 )
 from build_or_bust.search_query import bounded_query
 from build_or_bust.dashboard import confidence_chart_data
+from build_or_bust.evidence_gate import EvidenceGate
 from build_or_bust.ui import (
     checkpoint_result,
     public_demo_mode,
@@ -347,6 +348,79 @@ def test_confidence_chart_keeps_evidence_readiness_separate_from_judge_confidenc
     assert scores["Competitor evidence readiness"] == 0
     assert scores["Market evidence readiness"] == 100
     assert scores["Judge confidence"] == 75
+
+
+def test_competitor_report_allows_zero_direct_competitors():
+    report = CompetitorResearch(
+        summary="No direct competitors were found after the completed search.",
+        direct_competitors=[],
+        alternatives=["Manual workflow"],
+    )
+
+    assert report.direct_competitors == []
+
+
+def complete_evidence_state(direct_competitors=None):
+    return {
+        "consumer_research": {
+            "pain_points": ["The workflow is slow"],
+            "current_behaviors": ["People complete it manually"],
+        },
+        "research_sources": [
+            {"url": "https://consumer-one.example/report"},
+            {"url": "https://consumer-two.example/study"},
+            {"url": "https://consumer-one.example/survey"},
+        ],
+        "competitor_research": {
+            "summary": "Competitor search completed.",
+            "direct_competitors": direct_competitors or [],
+            "alternatives": ["Manual workflow"],
+        },
+        "competitor_sources": [
+            {
+                "url": "https://category-one.example/landscape",
+                "content_extracted": True,
+            },
+            {"url": "https://category-two.example/trends"},
+        ],
+        "market_feasibility_research": {
+            "demand_signals": ["Recurring user need"],
+            "market_proxies": ["Adjacent category growth"],
+            "adoption_constraints": ["Behavior change"],
+            "technical_dependencies": ["Standard web platform"],
+            "feasibility_risks": ["Unproven acquisition channel"],
+        },
+        "market_feasibility_sources": [
+            {"url": "https://market-one.example/report"},
+            {"url": "https://market-two.example/data"},
+            {"url": "https://market-one.example/forecast"},
+        ],
+    }
+
+
+def test_evidence_gate_accepts_completed_search_with_zero_direct_competitors():
+    assessment = EvidenceGate().assess(complete_evidence_state())
+    readiness = {
+        row["Measure"]: row["Percent"]
+        for row in confidence_chart_data(
+            {"evidence_assessment": assessment.model_dump()}
+        )
+    }
+
+    assert assessment.sufficient is True
+    assert assessment.coverage["competitor_search_completed"] is True
+    assert "direct_competitors" not in assessment.coverage
+    assert readiness["Competitor evidence readiness"] == 100
+
+
+def test_evidence_gate_rejects_a_skipped_competitor_search():
+    state = complete_evidence_state()
+    state["competitor_research"] = None
+
+    assessment = EvidenceGate().assess(state)
+
+    assert assessment.sufficient is False
+    assert any("competitor search completed" in check for check in assessment.failed_checks)
 
 
 def test_checkpoint_result_restores_pending_interrupts():
