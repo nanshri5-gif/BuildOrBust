@@ -54,6 +54,7 @@ from build_or_bust.ui import (
     public_demo_mode,
     recommendation_action_html,
     recommendation_label,
+    result_tabs_config,
 )
 
 
@@ -444,6 +445,25 @@ def test_public_demo_mode_defaults_to_disabled(monkeypatch):
     assert public_demo_mode() is False
 
 
+def test_result_tabs_default_to_normalized_idea_during_clarification():
+    default_tab, key = result_tabs_config(
+        {"thread_id": "thread-1"}, ["Normalized product idea"]
+    )
+
+    assert default_tab == "Normalized product idea"
+    assert key == "result_tabs_thread-1_clarification"
+
+
+def test_result_tabs_switch_to_decision_after_clarification():
+    default_tab, key = result_tabs_config(
+        {"thread_id": "thread-1"},
+        ["Decision", "Normalized product idea"],
+    )
+
+    assert default_tab == "Decision"
+    assert key == "result_tabs_thread-1_decision"
+
+
 def test_missing_input_does_not_call_model_provider():
     extractor = FakeExtractor([])
     result = build_graph(
@@ -740,6 +760,66 @@ def test_missing_fields_interrupt_and_resume():
     assert resumed["status"] == "judgment_complete"
     assert resumed["geography"] == "Canada"
     assert extractor.calls == 2
+
+
+def test_clarification_stops_after_three_unsuccessful_answers():
+    extractor = FakeExtractor([complete_data(geography=None)] * 4)
+    graph = build_graph(
+        extractor,
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+    )
+    thread_config = config("clarification-limit")
+
+    result = graph.invoke({"raw_input": "vague idea"}, config=thread_config)
+    for attempt in range(1, 4):
+        prompt = result["__interrupt__"][0].value
+        assert prompt["clarification_attempt"] == attempt
+        assert prompt["max_clarification_attempts"] == 3
+        result = graph.invoke(
+            Command(resume="I am still not specifying the geography"),
+            config=thread_config,
+        )
+
+    assert result["status"] == "insufficient_information"
+    assert result["clarification_count"] == 3
+    assert "didn't have enough information to process this idea" in result["error_message"]
+    assert not result.get("__interrupt__")
+    assert extractor.calls == 4
+
+
+def test_clarification_can_succeed_on_the_third_answer():
+    extractor = FakeExtractor(
+        [
+            complete_data(geography=None),
+            complete_data(geography=None),
+            complete_data(geography=None),
+            complete_data(geography="Canada"),
+        ]
+    )
+    graph = build_graph(
+        extractor,
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+    )
+    thread_config = config("clarification-third-answer")
+
+    result = graph.invoke({"raw_input": "vague idea"}, config=thread_config)
+    for answer in ("More detail one", "More detail two", "Launch in Canada"):
+        result = graph.invoke(Command(resume=answer), config=thread_config)
+
+    assert result["status"] == "judgment_complete"
+    assert result["clarification_count"] == 3
+    assert result["geography"] == "Canada"
+    assert extractor.calls == 4
 
 
 def test_api_failure_is_explicit():

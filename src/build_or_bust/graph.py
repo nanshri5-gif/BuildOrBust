@@ -35,6 +35,8 @@ from .recommendation import (
 )
 from .state import BuildOrBustState, REQUIRED_FIELDS
 
+MAX_CLARIFICATION_ATTEMPTS = 3
+
 
 def _clean(value: str | None) -> str | None:
     if value is None:
@@ -71,12 +73,26 @@ def build_graph(
 
         values = {name: _clean(getattr(data, name)) for name in REQUIRED_FIELDS}
         missing = [name for name, value in values.items() if value is None]
+        clarification_count = state.get("clarification_count", 0)
+        exhausted = bool(missing) and clarification_count >= MAX_CLARIFICATION_ATTEMPTS
         return {
             **values,
             "missing_fields": missing,
-            "status": "needs_clarification" if missing else "ready",
-            "error_code": None,
-            "error_message": None,
+            "clarification_count": clarification_count,
+            "status": (
+                "insufficient_information"
+                if exhausted
+                else "needs_clarification" if missing else "ready"
+            ),
+            "error_code": "insufficient_information" if exhausted else None,
+            "error_message": (
+                "We didn't have enough information to process this idea after "
+                "three clarification attempts. Please start a new evaluation "
+                "with a more specific product, customer, geography, problem, "
+                "and product type."
+                if exhausted
+                else None
+            ),
         }
 
     def route_after_intake(state: BuildOrBustState) -> str:
@@ -160,9 +176,21 @@ def build_graph(
 
     def clarify(state: BuildOrBustState) -> dict[str, Any]:
         missing = state.get("missing_fields", [])
+        clarification_count = state.get("clarification_count", 0)
+        attempt = clarification_count + 1
         labels = ", ".join(field.replace("_", " ") for field in missing)
-        question = f"Please clarify: {labels}."
-        answer = interrupt({"question": question, "missing_fields": missing})
+        question = (
+            f"Clarification {attempt} of {MAX_CLARIFICATION_ATTEMPTS}: "
+            f"please provide {labels}."
+        )
+        answer = interrupt(
+            {
+                "question": question,
+                "missing_fields": missing,
+                "clarification_attempt": attempt,
+                "max_clarification_attempts": MAX_CLARIFICATION_ATTEMPTS,
+            }
+        )
         if not isinstance(answer, str) or not answer.strip():
             return {
                 "status": "error",
@@ -172,6 +200,7 @@ def build_graph(
         return {
             "raw_input": f"{state['raw_input']}\nAdditional clarification: {answer.strip()}",
             "clarification_question": question,
+            "clarification_count": attempt,
             "status": "pending",
         }
 

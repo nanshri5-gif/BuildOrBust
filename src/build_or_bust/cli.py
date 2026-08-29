@@ -22,6 +22,8 @@ def _show(result: dict) -> None:
         print(prompt["question"])
     elif result.get("status") == "error":
         print(f"Error [{result.get('error_code')}]: {result.get('error_message')}")
+    elif result.get("status") == "insufficient_information":
+        print(f"INSUFFICIENT_INFORMATION: {result.get('error_message')}")
     elif result.get("status") == "insufficient_evidence":
         assessment = result["evidence_assessment"]
         print("INSUFFICIENT_EVIDENCE: research did not meet the evidence gate.")

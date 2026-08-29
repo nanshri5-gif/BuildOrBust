@@ -21,6 +21,7 @@ class BuildOrBustState(TypedDict, total=False):
     product_type: str | None
     missing_fields: list[str]
     clarification_question: str | None
+    clarification_count: int
     consumer_research: dict[str, Any] | None
     research_sources: list[dict[str, Any]]
     competitor_research: dict[str, Any] | None
@@ -44,6 +45,7 @@ class BuildOrBustState(TypedDict, total=False):
     status: Literal[
         "pending",
         "needs_clarification",
+        "insufficient_information",
         "ready",
         "no_prior_evaluation",
         "prior_evaluation_found",

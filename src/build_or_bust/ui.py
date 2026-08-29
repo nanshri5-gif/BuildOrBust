@@ -724,9 +724,23 @@ def show_review_summary(result: dict[str, Any]) -> None:
         st.caption(result["review_notes"])
 
 
+def result_tabs_config(
+    result: dict[str, Any], tab_names: list[str]
+) -> tuple[str, str]:
+    """Return a fresh tab identity when clarification becomes a final result."""
+
+    default_tab = "Decision" if "Decision" in tab_names else tab_names[0]
+    phase = "decision" if default_tab == "Decision" else "clarification"
+    thread_id = str(result.get("thread_id") or "current")
+    return default_tab, f"result_tabs_{thread_id}_{phase}"
+
+
 def show_results(result: dict[str, Any]) -> None:
     if result.get("status") == "error":
         st.error(f"{result.get('error_code')}: {result.get('error_message')}")
+        return
+    if result.get("status") == "insufficient_information":
+        st.warning(result.get("error_message"))
         return
     if result.get("status") == "insufficient_evidence":
         st.warning("Research stopped because the deterministic evidence gate did not pass.")
@@ -764,7 +778,13 @@ def show_results(result: dict[str, Any]) -> None:
     if result.get("market_feasibility_research"):
         research_tabs.append("Market & feasibility")
     if research_tabs:
-        tabs = dict(zip(research_tabs, st.tabs(research_tabs)))
+        default_tab, tabs_key = result_tabs_config(result, research_tabs)
+        tabs = dict(
+            zip(
+                research_tabs,
+                st.tabs(research_tabs, default=default_tab, key=tabs_key),
+            )
+        )
         if "Decision" in tabs:
             with tabs["Decision"]:
                 decision = judgment["decision"]
