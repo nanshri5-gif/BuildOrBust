@@ -1,27 +1,77 @@
-# Build or Bust — Stages 1–9
+# Build or Bust
 
-The workflow turns a raw product idea into validated shared state. If required
-facts are absent, execution pauses for a human answer and resumes from a SQLite
-checkpoint. Once intake is complete, Consumer, Competitor, and Market and
-Feasibility Research use You.com tools through MCP.
-Before generation continues, a deterministic Evidence Gate checks valid source
-counts, independent domains, required research coverage, and successful competitor
-page extraction. Weak support stops as `INSUFFICIENT_EVIDENCE`; it is not treated
-as a `VALIDATE` decision. The Assumption Killer then challenges sufficiently
-supported ideas using only the saved reports.
-Intake and clarification use Nebius Token Factory with JSON-schema output.
-The Judge evaluates the saved evidence and returns BUILD, VALIDATE, PIVOT, or BUST.
-The Recommendation Agent preserves that decision and converts it into constrained,
-measurable next actions for human review.
-The graph then pauses for a human to approve, revise, or reject the recommendation.
-Revision feedback regenerates only the recommendation, never the Judge's decision,
-and the workflow permits at most two revision cycles.
-Approved and rejected evaluations are saved in application-owned SQLite tables.
-After intake, a fresh exact fingerprint match pauses before research and asks whether
-to reuse the completed evaluation or refresh all research. Matches expire after 90 days;
-failed, incomplete, and insufficient-evidence runs are never registered.
+**An evidence-backed AI product discovery agent that turns a product idea into a
+BUILD, VALIDATE, PIVOT, or BUST decision.**
 
-## Setup
+Build or Bust collects a product proposal, fills missing intake details through
+human clarification, researches the opportunity, checks whether the evidence is
+strong enough to continue, challenges critical assumptions, and produces a
+decision with measurable validation actions.
+
+The application is built with Python, Streamlit, LangGraph, Nebius Token Factory,
+You.com MCP tools, and SQLite.
+
+## What it does
+
+- Normalizes a raw idea into product, customer, geography, problem, and product type.
+- Pauses for human clarification when required intake fields are missing.
+- Researches consumers, competitors, market demand, and technical feasibility.
+- Applies a deterministic evidence gate before model-generated conclusions.
+- Stops with `INSUFFICIENT_EVIDENCE` when source quality or coverage is too weak.
+- Challenges consequential assumptions using only collected evidence.
+- Returns one explicit decision: `BUILD`, `VALIDATE`, `PIVOT`, or `BUST`.
+- Generates recommended actions and validation experiments.
+- Pauses for human approval, revision, or rejection.
+- Saves checkpoints so interrupted evaluations can resume without restarting.
+- Reuses recent completed evaluations when the normalized idea matches.
+
+## Decision pipeline
+
+```mermaid
+flowchart LR
+    A[Idea proposal] --> B[Intake and clarification]
+    B --> C[Consumer research]
+    C --> D[Competitor research]
+    D --> E[Market and feasibility]
+    E --> F{Evidence gate}
+    F -->|Insufficient| G[Stop and abstain]
+    F -->|Sufficient| H[Assumption Killer]
+    H --> I[Judge]
+    I --> J[Recommendation Agent]
+    J --> K{Human review}
+    K -->|Revise| J
+    K -->|Approve or reject| L[Idea registry]
+```
+
+The evidence gate is intentionally separate from the Judge. Source counts,
+independent-domain counts, required topic coverage, and competitor page extraction
+determine whether the question is answerable before the model is asked to decide.
+
+## Decision meanings
+
+| Decision | Meaning |
+| --- | --- |
+| `BUILD` | Evidence supports proceeding with a constrained initial build. |
+| `VALIDATE` | The opportunity is plausible, but important assumptions need testing. |
+| `PIVOT` | The problem may be valuable, but the proposed direction should change. |
+| `BUST` | Evidence reveals a fatal flaw or contradicts the core opportunity. |
+
+## Technology
+
+| Layer | Technology |
+| --- | --- |
+| Interface | Streamlit |
+| Workflow orchestration | LangGraph |
+| Structured generation | Nebius Token Factory |
+| Web research | You.com MCP |
+| Validation | Pydantic and deterministic evidence checks |
+| Checkpoints and local registry | SQLite |
+| Tests | Pytest with fake model and research collaborators |
+
+## Local setup
+
+Requirements: Python 3.11 or newer. The project is currently tested with Python
+3.13.
 
 ```powershell
 py -m venv .venv
@@ -30,23 +80,54 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Put your Nebius API key in `.env`, and set `NEBIUS_MODEL` to a Nebius model
-marked as supporting JSON mode. Add `YDC_API_KEY` for authenticated You.com
-MCP access; without it, Consumer Research uses You.com's limited free search
-profile, but Competitor page extraction and Market Research are unavailable.
-The Assumption Killer performs one structured Nebius model call:
+Add your credentials to `.env`:
+
+```text
+NEBIUS_API_KEY=your_key
+NEBIUS_BASE_URL=https://api.tokenfactory.nebius.com/v1/
+NEBIUS_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507
+YDC_API_KEY=your_key
+YOU_MCP_URL=https://api.you.com/mcp?tools=you-search,you-contents,you-research
+CHECKPOINT_DB=build_or_bust.db
+PUBLIC_DEMO_MODE=false
+```
+
+Never commit `.env` or `.streamlit/secrets.toml`. Both are ignored by Git.
+
+## Run the Streamlit interface
+
+```powershell
+streamlit run src/build_or_bust/ui.py
+```
+
+Open `http://localhost:8501` and submit a product idea. The result page includes:
+
+- the original and normalized product proposal;
+- a color-coded Judge ruling and confidence score;
+- decision criteria and evidence-readiness gauges;
+- expandable consumer, competitor, and market research;
+- recommendation and validation-experiment cards; and
+- approve, revise, or reject human review.
+
+The URL contains the LangGraph thread ID after an evaluation starts. Reopening
+`http://localhost:8501/?thread=THREAD_ID` restores the checkpoint without repeating
+completed research calls.
+
+## Command-line interface
+
+Start an evaluation:
 
 ```powershell
 build-or-bust "A mobile app that helps busy US parents plan weeknight meals"
 ```
 
-If it asks a question, copy the displayed thread ID and resume it:
+Resume a clarification:
 
 ```powershell
 build-or-bust --thread YOUR_THREAD_ID --resume "The first market is Canada"
 ```
 
-After reviewing the recommendation, resume the same thread with one choice:
+Submit human review:
 
 ```powershell
 build-or-bust --thread YOUR_THREAD_ID --review approve --notes "Proceed"
@@ -54,70 +135,73 @@ build-or-bust --thread YOUR_THREAD_ID --review revise --notes "Use a cheaper one
 build-or-bust --thread YOUR_THREAD_ID --review reject --notes "Risk is too high"
 ```
 
-When an exact prior evaluation is found, choose one path:
+Choose whether to reuse an exact recent evaluation:
 
 ```powershell
 build-or-bust --thread YOUR_THREAD_ID --prior reuse
 build-or-bust --thread YOUR_THREAD_ID --prior refresh
 ```
 
-The same thread ID is essential: LangGraph uses it to find the saved checkpoint.
-Run `pytest` to verify the error, resume, and research paths without calling live APIs.
+## Tests
 
-## Local UI
-
-Install the updated dependencies, then start the Streamlit interface:
+The test suite uses fake API collaborators and does not call live model or research
+providers.
 
 ```powershell
-pip install -e ".[dev]"
-streamlit run src/build_or_bust/ui.py
+pytest
 ```
 
-The UI accepts a product idea, resumes clarification and prior-evaluation choices,
-shows research and sources, charts deterministic evidence readiness beside the
-Judge's separately reported confidence, and supports approve/revise/reject review.
-After submission, the page URL contains the LangGraph thread ID. Reopening a URL
-such as `http://localhost:8501/?thread=THREAD_ID` restores the saved checkpoint,
-including pending interrupts, without rerunning research APIs.
+Current result: **35 tests passing**.
 
-## Public cohort demo
+## Deploy a public cohort demo
 
-The repository is ready for Streamlit Community Cloud. Public-demo mode hides the
-shared evaluation-history sidebar and disables cross-visitor idea lookup and reuse.
-LangGraph thread checkpoints remain available while the deployed instance is running,
-but Community Cloud does not guarantee that the local SQLite file will survive an app
-restart or redeploy.
+The repository includes `requirements.txt`, `.streamlit/config.toml`, and a safe
+secrets template for Streamlit Community Cloud.
 
-1. Push this repository to GitHub.
-2. Sign in at `https://share.streamlit.io` and create an app from the repository.
-3. Set the entrypoint to `src/build_or_bust/ui.py` and select Python 3.13.
-4. Open Advanced settings and paste secrets using
-   `.streamlit/secrets.toml.example` as the template. Replace both API-key placeholders.
-5. Deploy and share the resulting `streamlit.app` URL.
+1. Push the repository to GitHub.
+2. Sign in at [share.streamlit.io](https://share.streamlit.io).
+3. Create an app from the GitHub repository.
+4. Set the entrypoint to `src/build_or_bust/ui.py`.
+5. Select Python 3.13 in Advanced settings.
+6. Paste `.streamlit/secrets.toml.example` into the Secrets field and replace both
+   API-key placeholders.
+7. Deploy and share the generated `streamlit.app` URL.
 
-Do not commit `.env` or `.streamlit/secrets.toml`. Both are ignored by Git. Configure
-Nebius and You.com spending or request limits before sharing the public URL because
-each new evaluation makes paid external API calls. For durable checkpoints and history,
-replace local SQLite with a hosted database before treating this as a production app.
+With `PUBLIC_DEMO_MODE=true`, the public app hides evaluation history and disables
+cross-visitor idea lookup and reuse. Thread checkpoints continue to work while the
+deployed instance remains running.
 
-To preview the public behavior locally, add this to `.env` and restart Streamlit:
+### Public-demo limitations
+
+- Streamlit Community Cloud does not guarantee persistence of the local SQLite file.
+- Checkpoints may disappear after a restart or redeployment.
+- Each new evaluation uses paid Nebius and You.com API calls.
+- Configure provider spending and request limits before sharing the URL publicly.
+- Use a hosted database and stronger abuse controls before treating the app as a
+  production service.
+
+## Project structure
 
 ```text
-PUBLIC_DEMO_MODE=true
+src/build_or_bust/
+├── ui.py                     Streamlit interface and checkpoint restoration
+├── cli.py                    Command-line interface
+├── graph.py                  LangGraph nodes, routing, interrupts, and persistence
+├── state.py                  Shared workflow state
+├── extractor.py              Nebius structured intake extraction
+├── consumer_research.py      You.com MCP consumer evidence
+├── competitor_research.py    Competitor and pricing evidence
+├── market_feasibility.py     Demand, adoption, dependency, and feasibility evidence
+├── evidence_gate.py          Deterministic answerability checks
+├── assumption_killer.py      Critical-assumption analysis
+├── judge.py                  BUILD, VALIDATE, PIVOT, or BUST decision
+├── recommendation.py         Actions and validation experiments
+├── idea_registry.py          Completed-evaluation storage and exact-match reuse
+└── dashboard.py              Confidence and evidence-readiness scores
 ```
 
-## Files
+## Current scope
 
-- `state.py` defines the single shared state contract.
-- `extractor.py` calls Nebius chat completions and validates JSON with Pydantic.
-- `consumer_research.py` calls You.com through MCP, then uses Nebius to validate a focused consumer report.
-- `competitor_research.py` uses MCP search and page extraction for competitors and pricing.
-- `market_feasibility.py` uses MCP structured research for demand and feasibility evidence.
-- `evidence_gate.py` makes the deterministic answerability decision before generation.
-- `assumption_killer.py` uses Nebius to challenge assumptions from saved evidence only.
-- `judge.py` uses Nebius to make one evidence-grounded decision without new research.
-- `recommendation.py` converts the saved decision into experiments and scoped next actions.
-- `idea_registry.py` stores completed evaluations, sources, and reviews and performs fresh exact-match lookup.
-- `graph.py` routes prior-idea lookup, research, evidence checks, judgment, recommendation, and human review.
-- `cli.py` starts or resumes a run.
-- `tests/test_stage1.py` covers all nine stages with fake API collaborators.
+This is a cohort demonstration and learning project. It is designed to make evidence
+quality, abstention, workflow state, model failures, and human review visible rather
+than hiding them behind a single model response.
