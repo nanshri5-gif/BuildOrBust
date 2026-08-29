@@ -735,12 +735,20 @@ def result_tabs_config(
     return default_tab, f"result_tabs_{thread_id}_{phase}"
 
 
+def result_tabs_visible(result: dict[str, Any]) -> bool:
+    """Keep partial intake data out of result tabs during clarification."""
+
+    return result.get("status") != "needs_clarification"
+
+
 def show_results(result: dict[str, Any]) -> None:
     if result.get("status") == "error":
         st.error(f"{result.get('error_code')}: {result.get('error_message')}")
         return
     if result.get("status") == "insufficient_information":
         st.warning(result.get("error_message"))
+        return
+    if not result_tabs_visible(result):
         return
     if result.get("status") == "insufficient_evidence":
         st.warning("Research stopped because the deterministic evidence gate did not pass.")

@@ -55,6 +55,7 @@ from build_or_bust.ui import (
     recommendation_action_html,
     recommendation_label,
     result_tabs_config,
+    result_tabs_visible,
 )
 
 
@@ -462,6 +463,14 @@ def test_result_tabs_switch_to_decision_after_clarification():
 
     assert default_tab == "Decision"
     assert key == "result_tabs_thread-1_decision"
+
+
+def test_result_tabs_are_hidden_while_clarification_is_pending():
+    assert result_tabs_visible({"status": "needs_clarification"}) is False
+
+
+def test_result_tabs_are_visible_after_clarification_completes():
+    assert result_tabs_visible({"status": "judgment_complete"}) is True
 
 
 def test_missing_input_does_not_call_model_provider():
