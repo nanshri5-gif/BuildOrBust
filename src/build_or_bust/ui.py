@@ -413,6 +413,13 @@ def apply_app_style() -> None:
             line-height: 1.55;
             margin-bottom: 1rem;
         }
+        .recommendation-action {
+            color: var(--ink);
+            font-size: 1rem;
+            line-height: 1.55;
+            margin-bottom: 1rem;
+            white-space: normal;
+        }
         .completion-target {
             background: #FAFAF8;
             border-radius: 12px;
@@ -576,12 +583,20 @@ def recommendation_label(number: int, action: str, max_chars: int = 88) -> str:
     return f"{number}. {escaped} · Not started"
 
 
+def recommendation_action_html(action: str) -> str:
+    """Render model-generated action text literally instead of as Markdown."""
+
+    return f"<div class='recommendation-action'>{html.escape(str(action))}</div>"
+
+
 def show_recommendation(recommendation: dict[str, Any]) -> None:
     for number, action in enumerate(recommendation["next_actions"], start=1):
         full_action = str(action["action"])
         label = recommendation_label(number, full_action)
         with st.expander(label, expanded=False):
-            st.write(full_action)
+            st.markdown(
+                recommendation_action_html(full_action), unsafe_allow_html=True
+            )
             purpose = html.escape(str(action["purpose"]))
             completion = html.escape(str(action["completion_criterion"]))
             st.markdown(

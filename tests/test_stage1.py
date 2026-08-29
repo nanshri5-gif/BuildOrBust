@@ -48,7 +48,12 @@ from build_or_bust.recommendation import (
 )
 from build_or_bust.search_query import bounded_query
 from build_or_bust.dashboard import confidence_chart_data
-from build_or_bust.ui import checkpoint_result, public_demo_mode, recommendation_label
+from build_or_bust.ui import (
+    checkpoint_result,
+    public_demo_mode,
+    recommendation_action_html,
+    recommendation_label,
+)
 
 
 class FakeExtractor:
@@ -299,6 +304,16 @@ def test_recommendation_label_is_short_and_escapes_markdown_math():
     assert "core\\_assumption" in label
     assert "…" in label
     assert len(label) < len(action)
+
+
+def test_recommendation_action_is_literal_safe_html():
+    rendered = recommendation_action_html(
+        "Survey at $300, $500, and $700; don't parse <script>alert(1)</script>."
+    )
+
+    assert "$300, $500, and $700" in rendered
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;" in rendered
 
 
 def test_confidence_chart_keeps_evidence_readiness_separate_from_judge_confidence():
