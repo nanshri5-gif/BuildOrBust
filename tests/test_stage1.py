@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import sqlite3
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -32,6 +33,7 @@ from build_or_bust.judge import (
     Judgment,
     NebiusJudge,
 )
+from build_or_bust.idea_registry import SQLiteIdeaRegistry
 from build_or_bust.market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearch,
@@ -45,6 +47,8 @@ from build_or_bust.recommendation import (
     ValidationExperiment,
 )
 from build_or_bust.search_query import bounded_query
+from build_or_bust.dashboard import confidence_chart_data
+from build_or_bust.ui import checkpoint_result
 
 
 class FakeExtractor:
@@ -248,9 +252,11 @@ class FakeRecommendationAgent:
             human_review_questions=["What budget is available for validation?"],
         )
         self.calls = 0
+        self.states = []
 
     def recommend(self, state):
         self.calls += 1
+        self.states.append(dict(state))
         if isinstance(self.output, Exception):
             raise self.output
         return self.output
@@ -279,6 +285,50 @@ def test_search_query_is_normalized_and_bounded():
     assert not query.endswith(" ")
 
 
+def test_confidence_chart_keeps_evidence_readiness_separate_from_judge_confidence():
+    rows = confidence_chart_data(
+        {
+            "evidence_assessment": {
+                "source_counts": {"consumer": 3, "competitor": 2, "market": 3},
+                "independent_domain_counts": {
+                    "consumer": 2,
+                    "competitor": 2,
+                    "market": 2,
+                },
+                "extracted_page_counts": {"competitor": 0},
+                "coverage": {
+                    "consumer_pain_points": True,
+                    "consumer_current_behaviors": True,
+                    "direct_competitors": True,
+                    "existing_alternatives": True,
+                    "market_demand_signals": True,
+                    "market_proxies": True,
+                    "adoption_constraints": True,
+                    "technical_dependencies": True,
+                    "feasibility_risks": True,
+                },
+            },
+            "judgment": {"confidence": 0.75},
+        }
+    )
+    scores = {row["Measure"]: row["Percent"] for row in rows}
+    assert scores["Consumer evidence readiness"] == 100
+    assert scores["Competitor evidence readiness"] == 0
+    assert scores["Market evidence readiness"] == 100
+    assert scores["Judge confidence"] == 75
+
+
+def test_checkpoint_result_restores_pending_interrupts():
+    pending = SimpleNamespace(value={"question": "Please clarify geography"})
+    snapshot = SimpleNamespace(
+        values={"status": "needs_clarification", "product_idea": "Idea"},
+        tasks=(SimpleNamespace(interrupts=(pending,)),),
+    )
+    result = checkpoint_result(snapshot)
+    assert result["status"] == "needs_clarification"
+    assert result["__interrupt__"] == (pending,)
+
+
 def test_missing_input_does_not_call_model_provider():
     extractor = FakeExtractor([])
     result = build_graph(
@@ -296,14 +346,14 @@ def test_missing_input_does_not_call_model_provider():
     assert extractor.calls == 0
 
 
-def test_complete_flow_reaches_judgment():
+def test_complete_flow_pauses_for_review_and_can_be_approved():
     researcher = FakeResearcher()
     competitor_researcher = FakeCompetitorResearcher()
     market_researcher = FakeMarketFeasibilityResearcher()
     assumption_killer = FakeAssumptionKiller()
     judge = FakeJudge()
     recommendation_agent = FakeRecommendationAgent()
-    result = build_graph(
+    graph = build_graph(
         FakeExtractor([complete_data()]),
         researcher,
         competitor_researcher,
@@ -312,10 +362,18 @@ def test_complete_flow_reaches_judgment():
         judge,
         InMemorySaver(),
         recommendation_agent=recommendation_agent,
-    ).invoke(
-        {"raw_input": "idea"}, config=config()
     )
-    assert result["status"] == "recommendation_complete"
+    first = graph.invoke({"raw_input": "idea"}, config=config())
+    assert first["__interrupt__"][0].value["choices"] == [
+        "approve",
+        "revise",
+        "reject",
+    ]
+    result = graph.invoke(
+        Command(resume={"action": "approve", "notes": "Proceed with validation"}),
+        config=config(),
+    )
+    assert result["status"] == "review_complete"
     assert result["missing_fields"] == []
     assert result["consumer_research"]["pain_points"] == ["Planning takes time"]
     assert result["research_sources"][0]["url"] == "https://example.com/study"
@@ -335,6 +393,184 @@ def test_complete_flow_reaches_judgment():
     assert result["evidence_assessment"]["sufficient"] is True
     assert result["recommendation"]["decision"] == "VALIDATE"
     assert recommendation_agent.calls == 1
+    assert result["review_action"] == "approve"
+    assert result["review_notes"] == "Proceed with validation"
+
+
+def test_review_revision_regenerates_only_recommendation_then_pauses_again():
+    recommendation_agent = FakeRecommendationAgent()
+    graph = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=recommendation_agent,
+    )
+    review_config = config("revise-recommendation")
+    graph.invoke({"raw_input": "idea"}, config=review_config)
+    revised = graph.invoke(
+        Command(
+            resume={
+                "action": "revise",
+                "notes": "Make the first experiment cheaper and one week long.",
+            }
+        ),
+        config=review_config,
+    )
+
+    assert revised["__interrupt__"]
+    assert recommendation_agent.calls == 2
+    assert recommendation_agent.states[1]["review_feedback"] == (
+        "Make the first experiment cheaper and one week long."
+    )
+    approved = graph.invoke(
+        Command(resume={"action": "approve", "notes": "Revision accepted"}),
+        config=review_config,
+    )
+    assert approved["status"] == "review_complete"
+    assert approved["recommendation_revision_count"] == 1
+    assert [item["action"] for item in approved["review_history"]] == [
+        "revise",
+        "approve",
+    ]
+
+
+def test_review_revision_limit_stops_the_loop():
+    graph = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+    )
+    review_config = config("revision-limit")
+    graph.invoke({"raw_input": "idea"}, config=review_config)
+    for number in range(2):
+        graph.invoke(
+            Command(resume={"action": "revise", "notes": f"Revision {number}"}),
+            config=review_config,
+        )
+    stopped = graph.invoke(
+        Command(resume={"action": "revise", "notes": "One more revision"}),
+        config=review_config,
+    )
+    assert stopped["status"] == "error"
+    assert stopped["error_code"] == "revision_limit_reached"
+
+
+def test_approved_evaluation_can_be_reused_without_research(tmp_path):
+    registry_path = tmp_path / "registry.db"
+    registry = SQLiteIdeaRegistry(registry_path)
+    first_graph = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+        idea_registry=registry,
+    )
+    first_config = config("original-evaluation")
+    first_graph.invoke(
+        {"raw_input": "idea", "thread_id": "original-evaluation"},
+        config=first_config,
+    )
+    saved = first_graph.invoke(
+        Command(resume={"action": "approve", "notes": "Approved"}),
+        config=first_config,
+    )
+    assert saved["status"] == "review_complete"
+    assert saved["evaluation_saved"] is True
+
+    researcher = FakeResearcher()
+    competitor = FakeCompetitorResearcher()
+    market = FakeMarketFeasibilityResearcher()
+    second_graph = build_graph(
+        FakeExtractor([complete_data()]),
+        researcher,
+        competitor,
+        market,
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+        idea_registry=registry,
+    )
+    second_config = config("reuse-evaluation")
+    match = second_graph.invoke(
+        {"raw_input": "same idea", "thread_id": "reuse-evaluation"},
+        config=second_config,
+    )
+    assert match["__interrupt__"][0].value["choices"] == ["reuse", "refresh"]
+    reused = second_graph.invoke(
+        Command(resume={"action": "reuse"}), config=second_config
+    )
+
+    assert reused["status"] == "evaluation_reused"
+    assert reused["judgment"]["decision"] == "VALIDATE"
+    assert reused["reused_from_evaluation_id"] == saved["evaluation_id"]
+    assert researcher.calls == 0
+    assert competitor.calls == 0
+    assert market.calls == 0
+    history = registry.list_recent()
+    assert len(history) == 1
+    assert history[0].evaluation_id == saved["evaluation_id"]
+    assert history[0].intake["product_idea"] == "A meal-planning app"
+    assert history[0].decision == "VALIDATE"
+    with sqlite3.connect(registry_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM idea_evaluations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM evaluation_sources").fetchone()[0] == 8
+        assert connection.execute("SELECT COUNT(*) FROM evaluation_reviews").fetchone()[0] == 1
+
+
+def test_prior_evaluation_refresh_runs_research(tmp_path):
+    registry = SQLiteIdeaRegistry(tmp_path / "refresh.db")
+    seed_graph = build_graph(
+        FakeExtractor([complete_data()]),
+        FakeResearcher(),
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+        idea_registry=registry,
+    )
+    seed_config = config("refresh-seed")
+    seed_graph.invoke({"raw_input": "idea"}, config=seed_config)
+    seed_graph.invoke(
+        Command(resume={"action": "reject", "notes": "Not now"}),
+        config=seed_config,
+    )
+
+    researcher = FakeResearcher()
+    refresh_graph = build_graph(
+        FakeExtractor([complete_data()]),
+        researcher,
+        FakeCompetitorResearcher(),
+        FakeMarketFeasibilityResearcher(),
+        FakeAssumptionKiller(),
+        FakeJudge(),
+        InMemorySaver(),
+        recommendation_agent=FakeRecommendationAgent(),
+        idea_registry=registry,
+    )
+    refresh_config = config("refresh-run")
+    refresh_graph.invoke({"raw_input": "idea"}, config=refresh_config)
+    refreshed = refresh_graph.invoke(
+        Command(resume={"action": "refresh"}), config=refresh_config
+    )
+
+    assert refreshed["__interrupt__"]
+    assert researcher.calls == 1
 
 
 def test_weak_evidence_stops_before_assumption_killer_and_judge():

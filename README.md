@@ -1,4 +1,4 @@
-# Build or Bust — Stages 1–7
+# Build or Bust — Stages 1–9
 
 The workflow turns a raw product idea into validated shared state. If required
 facts are absent, execution pauses for a human answer and resumes from a SQLite
@@ -13,8 +13,13 @@ Intake and clarification use Nebius Token Factory with JSON-schema output.
 The Judge evaluates the saved evidence and returns BUILD, VALIDATE, PIVOT, or BUST.
 The Recommendation Agent preserves that decision and converts it into constrained,
 measurable next actions for human review.
-
-The workflow stops after producing the recommendation; a human makes the final call.
+The graph then pauses for a human to approve, revise, or reject the recommendation.
+Revision feedback regenerates only the recommendation, never the Judge's decision,
+and the workflow permits at most two revision cycles.
+Approved and rejected evaluations are saved in application-owned SQLite tables.
+After intake, a fresh exact fingerprint match pauses before research and asks whether
+to reuse the completed evaluation or refresh all research. Matches expire after 90 days;
+failed, incomplete, and insufficient-evidence runs are never registered.
 
 ## Setup
 
@@ -41,8 +46,39 @@ If it asks a question, copy the displayed thread ID and resume it:
 build-or-bust --thread YOUR_THREAD_ID --resume "The first market is Canada"
 ```
 
+After reviewing the recommendation, resume the same thread with one choice:
+
+```powershell
+build-or-bust --thread YOUR_THREAD_ID --review approve --notes "Proceed"
+build-or-bust --thread YOUR_THREAD_ID --review revise --notes "Use a cheaper one-week test"
+build-or-bust --thread YOUR_THREAD_ID --review reject --notes "Risk is too high"
+```
+
+When an exact prior evaluation is found, choose one path:
+
+```powershell
+build-or-bust --thread YOUR_THREAD_ID --prior reuse
+build-or-bust --thread YOUR_THREAD_ID --prior refresh
+```
+
 The same thread ID is essential: LangGraph uses it to find the saved checkpoint.
 Run `pytest` to verify the error, resume, and research paths without calling live APIs.
+
+## Local UI
+
+Install the updated dependencies, then start the Streamlit interface:
+
+```powershell
+pip install -e ".[dev]"
+streamlit run src/build_or_bust/ui.py
+```
+
+The UI accepts a product idea, resumes clarification and prior-evaluation choices,
+shows research and sources, charts deterministic evidence readiness beside the
+Judge's separately reported confidence, and supports approve/revise/reject review.
+After submission, the page URL contains the LangGraph thread ID. Reopening a URL
+such as `http://localhost:8501/?thread=THREAD_ID` restores the saved checkpoint,
+including pending interrupts, without rerunning research APIs.
 
 ## Files
 
@@ -55,6 +91,7 @@ Run `pytest` to verify the error, resume, and research paths without calling liv
 - `assumption_killer.py` uses Nebius to challenge assumptions from saved evidence only.
 - `judge.py` uses Nebius to make one evidence-grounded decision without new research.
 - `recommendation.py` converts the saved decision into experiments and scoped next actions.
-- `graph.py` routes intake, clarification, research, the evidence gate, assumption analysis, judgment, and recommendation.
+- `idea_registry.py` stores completed evaluations, sources, and reviews and performs fresh exact-match lookup.
+- `graph.py` routes prior-idea lookup, research, evidence checks, judgment, recommendation, and human review.
 - `cli.py` starts or resumes a run.
-- `tests/test_stage1.py` covers all seven stages with fake API collaborators.
+- `tests/test_stage1.py` covers all nine stages with fake API collaborators.

@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 import sqlite3
 from typing import Any
 
@@ -21,6 +22,7 @@ from .consumer_research import Researcher, ResearchFailure, YouMCPConsumerResear
 from .extractor import ExtractionFailure, Extractor, NebiusExtractor
 from .evidence_gate import EvidenceGate
 from .judge import Judge, JudgeFailure, NebiusJudge
+from .idea_registry import IdeaRegistry, IdeaRegistryFailure, SQLiteIdeaRegistry
 from .market_feasibility import (
     MarketFeasibilityFailure,
     MarketFeasibilityResearcher,
@@ -50,6 +52,7 @@ def build_graph(
     checkpointer: Any,
     recommendation_agent: RecommendationAgent | None = None,
     evidence_gate: EvidenceGate | None = None,
+    idea_registry: IdeaRegistry | None = None,
 ):
     gate = evidence_gate or EvidenceGate()
 
@@ -80,6 +83,78 @@ def build_graph(
         if state.get("status") == "needs_clarification":
             return "clarify"
         if state.get("status") == "ready":
+            return "prior_lookup" if idea_registry is not None else "research"
+        return "done"
+
+    def prior_idea_lookup(state: BuildOrBustState) -> dict[str, Any]:
+        if idea_registry is None:
+            return {"status": "no_prior_evaluation"}
+        try:
+            match = idea_registry.find_recent(state)
+        except IdeaRegistryFailure as exc:
+            return {
+                "status": "error",
+                "error_code": "idea_registry_failure",
+                "error_message": str(exc),
+            }
+        if match is None:
+            return {"status": "no_prior_evaluation", "prior_evaluation": None}
+        return {
+            "status": "prior_evaluation_found",
+            "prior_evaluation": match.model_dump(),
+        }
+
+    def route_after_prior_lookup(state: BuildOrBustState) -> str:
+        if state.get("status") == "no_prior_evaluation":
+            return "research"
+        if state.get("status") == "prior_evaluation_found":
+            return "choose"
+        return "done"
+
+    def choose_prior_evaluation(state: BuildOrBustState) -> dict[str, Any]:
+        prior = state.get("prior_evaluation") or {}
+        response = interrupt(
+            {
+                "kind": "prior_evaluation",
+                "question": "A fresh completed evaluation matches this idea. Reuse it or refresh research?",
+                "choices": ["reuse", "refresh"],
+                "decision": prior.get("decision"),
+                "review_action": prior.get("review_action"),
+                "created_at": prior.get("created_at"),
+                "original_thread_id": prior.get("original_thread_id"),
+            }
+        )
+        if not isinstance(response, dict):
+            return {
+                "status": "error",
+                "error_code": "invalid_prior_evaluation_response",
+                "error_message": "Prior-evaluation choice must be reuse or refresh.",
+            }
+        action = str(response.get("action") or "").strip().lower()
+        if action == "refresh":
+            return {"status": "ready_for_research"}
+        if action == "reuse":
+            snapshot = prior.get("snapshot")
+            if not isinstance(snapshot, dict):
+                return {
+                    "status": "error",
+                    "error_code": "idea_registry_failure",
+                    "error_message": "The prior evaluation snapshot is malformed.",
+                }
+            return {
+                **snapshot,
+                "status": "evaluation_reused",
+                "reused_from_evaluation_id": prior.get("evaluation_id"),
+                "evaluation_saved": False,
+            }
+        return {
+            "status": "error",
+            "error_code": "invalid_prior_evaluation_response",
+            "error_message": "Prior-evaluation choice must be reuse or refresh.",
+        }
+
+    def route_after_prior_choice(state: BuildOrBustState) -> str:
+        if state.get("status") == "ready_for_research":
             return "research"
         return "done"
 
@@ -237,9 +312,100 @@ def build_graph(
             "error_message": None,
         }
 
+    def human_review(state: BuildOrBustState) -> dict[str, Any]:
+        response = interrupt(
+            {
+                "kind": "human_review",
+                "question": "Review the recommendation: approve, revise, or reject?",
+                "choices": ["approve", "revise", "reject"],
+                "revision_count": state.get("recommendation_revision_count", 0),
+                "max_revisions": 2,
+            }
+        )
+        if not isinstance(response, dict):
+            return {
+                "status": "error",
+                "error_code": "invalid_review_response",
+                "error_message": "Review must include an action and optional notes.",
+            }
+        action = str(response.get("action") or "").strip().lower()
+        notes = str(response.get("notes") or "").strip()
+        if action not in {"approve", "revise", "reject"}:
+            return {
+                "status": "error",
+                "error_code": "invalid_review_response",
+                "error_message": "Review action must be approve, revise, or reject.",
+            }
+        revision_count = state.get("recommendation_revision_count", 0)
+        history = [
+            *state.get("review_history", []),
+            {
+                "action": action,
+                "notes": notes,
+                "revision_count": revision_count,
+                "reviewed_at": datetime.now(UTC).isoformat(),
+            },
+        ]
+        if action == "revise":
+            if not notes:
+                return {
+                    "status": "error",
+                    "error_code": "review_feedback_required",
+                    "error_message": "Revision feedback cannot be empty.",
+                }
+            if revision_count >= 2:
+                return {
+                    "status": "error",
+                    "error_code": "revision_limit_reached",
+                    "error_message": "The recommendation revision limit has been reached.",
+                    "review_history": history,
+                }
+            return {
+                "status": "revision_requested",
+                "review_action": action,
+                "review_notes": notes,
+                "review_feedback": notes,
+                "recommendation_revision_count": revision_count + 1,
+                "review_history": history,
+            }
+        return {
+            "status": "review_complete",
+            "review_action": action,
+            "review_notes": notes,
+            "review_feedback": None,
+            "recommendation_revision_count": revision_count,
+            "review_history": history,
+        }
+
+    def route_after_human_review(state: BuildOrBustState) -> str:
+        if state.get("status") == "revision_requested":
+            return "revise"
+        if state.get("status") == "review_complete" and idea_registry is not None:
+            return "persist"
+        return "done"
+
+    def persist_evaluation(state: BuildOrBustState) -> dict[str, Any]:
+        if idea_registry is None:
+            return {"status": "review_complete"}
+        try:
+            evaluation_id = idea_registry.save(state)
+        except IdeaRegistryFailure as exc:
+            return {
+                "status": "error",
+                "error_code": "idea_registry_failure",
+                "error_message": str(exc),
+            }
+        return {
+            "status": "review_complete",
+            "evaluation_id": evaluation_id,
+            "evaluation_saved": True,
+        }
+
     builder = StateGraph(BuildOrBustState)
     builder.add_node("intake", intake)
     builder.add_node("clarify", clarify)
+    builder.add_node("prior_idea_lookup", prior_idea_lookup)
+    builder.add_node("choose_prior_evaluation", choose_prior_evaluation)
     builder.add_node("consumer_research", consumer_research)
     builder.add_node("competitor_research", competitor_research)
     builder.add_node("market_feasibility_research", market_feasibility_research)
@@ -248,13 +414,35 @@ def build_graph(
     builder.add_node("judgment", judgment)
     if recommendation_agent is not None:
         builder.add_node("recommendation", recommendation)
+        builder.add_node("human_review", human_review)
+        if idea_registry is not None:
+            builder.add_node("persist_evaluation", persist_evaluation)
     builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
         route_after_intake,
-        {"clarify": "clarify", "research": "consumer_research", "done": END},
+        {
+            "clarify": "clarify",
+            "prior_lookup": "prior_idea_lookup",
+            "research": "consumer_research",
+            "done": END,
+        },
     )
     builder.add_edge("clarify", "intake")
+    builder.add_conditional_edges(
+        "prior_idea_lookup",
+        route_after_prior_lookup,
+        {
+            "research": "consumer_research",
+            "choose": "choose_prior_evaluation",
+            "done": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "choose_prior_evaluation",
+        route_after_prior_choice,
+        {"research": "consumer_research", "done": END},
+    )
     builder.add_conditional_edges(
         "consumer_research",
         route_after_consumer_research,
@@ -282,7 +470,18 @@ def build_graph(
     )
     if recommendation_agent is not None:
         builder.add_edge("judgment", "recommendation")
-        builder.add_edge("recommendation", END)
+        builder.add_edge("recommendation", "human_review")
+        builder.add_conditional_edges(
+            "human_review",
+            route_after_human_review,
+            {
+                "revise": "recommendation",
+                "persist": "persist_evaluation" if idea_registry is not None else END,
+                "done": END,
+            },
+        )
+        if idea_registry is not None:
+            builder.add_edge("persist_evaluation", END)
     else:
         builder.add_edge("judgment", END)
     return builder.compile(checkpointer=checkpointer)
@@ -298,6 +497,7 @@ def open_graph(
     assumption_killer: AssumptionKiller | None = None,
     judge: Judge | None = None,
     recommendation_agent: RecommendationAgent | None = None,
+    idea_registry: IdeaRegistry | None = None,
 ) -> Iterator[Any]:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -310,6 +510,7 @@ def open_graph(
             judge or NebiusJudge(),
             SqliteSaver(connection),
             recommendation_agent=recommendation_agent or NebiusRecommendationAgent(),
+            idea_registry=idea_registry or SQLiteIdeaRegistry(db_path),
         )
     finally:
         connection.close()

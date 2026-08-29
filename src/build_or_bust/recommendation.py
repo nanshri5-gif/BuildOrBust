@@ -96,6 +96,8 @@ class NebiusRecommendationAgent:
             "market_feasibility_research": state.get("market_feasibility_research"),
             "assumption_analysis": state.get("assumption_analysis"),
             "judgment": judgment,
+            "current_recommendation": state.get("recommendation"),
+            "revision_feedback": state.get("review_feedback"),
         }
         prompt = (
             "Create an actionable recommendation using only the saved evidence. Do not "
@@ -106,7 +108,9 @@ class NebiusRecommendationAgent:
             "it succeeds. For BUST, recommend stopping the current idea; build_now must be "
             "empty. Every experiment needs a measurable success criterion and failure "
             "signal. evidence_used must name and paraphrase saved evidence. Keep unresolved "
-            "claims explicit and end with questions requiring human review.\n\n"
+            "claims explicit and end with questions requiring human review. If revision "
+            "feedback is present, revise the action plan in response while preserving the "
+            "Judge's decision and all other constraints.\n\n"
             f"SAVED STATE:\n{json.dumps(evidence, ensure_ascii=False)}"
         )
         try:

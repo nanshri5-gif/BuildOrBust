@@ -17,8 +17,9 @@ def _show_sources(sources: list[dict], limit: int = 10) -> None:
 
 
 def _show(result: dict) -> None:
-    if result.get("__interrupt__"):
-        print(result["__interrupt__"][0].value["question"])
+    prompt = result["__interrupt__"][0].value if result.get("__interrupt__") else None
+    if prompt and not prompt.get("choices"):
+        print(prompt["question"])
     elif result.get("status") == "error":
         print(f"Error [{result.get('error_code')}]: {result.get('error_message')}")
     elif result.get("status") == "insufficient_evidence":
@@ -173,14 +174,43 @@ def _show(result: dict) -> None:
                     print(f"  {label}:")
                     for item in recommendation[key]:
                         print(f"    - {item}")
+        if result.get("status") == "review_complete":
+            print("\nHuman review complete:")
+            print(f"  Action: {result['review_action'].upper()}")
+            print(f"  Notes: {result.get('review_notes') or 'None'}")
+            print(f"  Recommendation revisions: {result.get('recommendation_revision_count', 0)}")
+            if result.get("evaluation_saved"):
+                print(f"  Saved evaluation ID: {result.get('evaluation_id')}")
+        if result.get("status") == "evaluation_reused":
+            print("\nPrior evaluation reused; research APIs were not called.")
+            print(f"  Evaluation ID: {result.get('reused_from_evaluation_id')}")
+        if prompt and prompt.get("choices"):
+            print(f"\n{prompt['question']}")
+            if prompt.get("decision"):
+                print(f"Prior decision: {prompt['decision']}")
+                print(f"Prior review: {prompt.get('review_action')}")
+                print(f"Created: {prompt.get('created_at')}")
+            print(f"Choices: {', '.join(prompt['choices'])}")
+            if prompt.get("kind") == "prior_evaluation":
+                print("Resume with --prior reuse or --prior refresh.")
+            else:
+                print("Resume with --review CHOICE and optional --notes TEXT.")
 
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–7")
+    parser = argparse.ArgumentParser(description="Build or Bust — Stages 1–8")
     parser.add_argument("idea", nargs="?", help="Product idea to normalize")
     parser.add_argument("--thread", default=str(uuid.uuid4()), help="Persistent run ID")
-    parser.add_argument("--resume", help="Answer a saved clarification question")
+    resume_options = parser.add_mutually_exclusive_group()
+    resume_options.add_argument("--resume", help="Answer a saved clarification question")
+    resume_options.add_argument(
+        "--review", choices=("approve", "revise", "reject"), help="Resume human review"
+    )
+    resume_options.add_argument(
+        "--prior", choices=("reuse", "refresh"), help="Reuse or refresh a prior evaluation"
+    )
+    parser.add_argument("--notes", default="", help="Human-review notes or revision feedback")
     parser.add_argument(
         "--show", action="store_true", help="Display saved state without running the graph"
     )
@@ -196,9 +226,15 @@ def main() -> None:
                     "error_code": "checkpoint_not_found",
                     "error_message": "No saved checkpoint exists for this thread ID.",
                 }
+        elif args.review is not None:
+            request = Command(resume={"action": args.review, "notes": args.notes})
+            result = graph.invoke(request, config=config)
+        elif args.prior is not None:
+            request = Command(resume={"action": args.prior})
+            result = graph.invoke(request, config=config)
         else:
             request = Command(resume=args.resume) if args.resume is not None else {
-                "raw_input": args.idea or "", "status": "pending"
+                "raw_input": args.idea or "", "status": "pending", "thread_id": args.thread
             }
             result = graph.invoke(request, config=config)
         print(f"Thread: {args.thread}")

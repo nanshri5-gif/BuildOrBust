@@ -31,10 +31,24 @@ class BuildOrBustState(TypedDict, total=False):
     assumption_analysis: dict[str, Any] | None
     judgment: dict[str, Any] | None
     recommendation: dict[str, Any] | None
+    review_action: Literal["approve", "revise", "reject"] | None
+    review_notes: str | None
+    review_feedback: str | None
+    recommendation_revision_count: int
+    review_history: list[dict[str, Any]]
+    prior_evaluation: dict[str, Any] | None
+    reused_from_evaluation_id: str | None
+    evaluation_id: str | None
+    evaluation_saved: bool
+    thread_id: str | None
     status: Literal[
         "pending",
         "needs_clarification",
         "ready",
+        "no_prior_evaluation",
+        "prior_evaluation_found",
+        "ready_for_research",
+        "evaluation_reused",
         "researching",
         "research_complete",
         "competitor_research_complete",
@@ -44,6 +58,8 @@ class BuildOrBustState(TypedDict, total=False):
         "assumption_analysis_complete",
         "judgment_complete",
         "recommendation_complete",
+        "revision_requested",
+        "review_complete",
         "error",
     ]
     error_code: str | None

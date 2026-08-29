@@ -14,6 +14,7 @@ class EvidenceAssessment(BaseModel):
     sufficient: bool
     source_counts: dict[str, int]
     independent_domain_counts: dict[str, int]
+    extracted_page_counts: dict[str, int]
     coverage: dict[str, bool]
     failed_checks: list[str]
 
@@ -63,6 +64,12 @@ class EvidenceGate:
         }
         source_counts = {name: len(sources) for name, sources in groups.items()}
         domain_counts = {name: _domain_count(sources) for name, sources in groups.items()}
+        extracted_page_counts = {
+            "competitor": sum(
+                bool(source.get("content_extracted"))
+                for source in groups["competitor"]
+            )
+        }
 
         consumer = state.get("consumer_research") or {}
         competitor = state.get("competitor_research") or {}
@@ -84,7 +91,7 @@ class EvidenceGate:
             f"consumer needs at least {self.thresholds.consumer_domains} independent domains": domain_counts["consumer"] >= self.thresholds.consumer_domains,
             f"competitor needs at least {self.thresholds.competitor_sources} valid unique sources": source_counts["competitor"] >= self.thresholds.competitor_sources,
             f"competitor needs at least {self.thresholds.competitor_domains} independent domains": domain_counts["competitor"] >= self.thresholds.competitor_domains,
-            f"competitor needs at least {self.thresholds.competitor_extracted_pages} successfully extracted page": sum(bool(source.get("content_extracted")) for source in groups["competitor"]) >= self.thresholds.competitor_extracted_pages,
+            f"competitor needs at least {self.thresholds.competitor_extracted_pages} successfully extracted page": extracted_page_counts["competitor"] >= self.thresholds.competitor_extracted_pages,
             f"market needs at least {self.thresholds.market_sources} valid unique sources": source_counts["market"] >= self.thresholds.market_sources,
             f"market needs at least {self.thresholds.market_domains} independent domains": domain_counts["market"] >= self.thresholds.market_domains,
         }
@@ -94,6 +101,7 @@ class EvidenceGate:
             sufficient=not failed,
             source_counts=source_counts,
             independent_domain_counts=domain_counts,
+            extracted_page_counts=extracted_page_counts,
             coverage=coverage,
             failed_checks=failed,
         )
