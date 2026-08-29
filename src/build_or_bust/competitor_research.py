@@ -82,7 +82,21 @@ class YouMCPCompetitorResearcher:
             state.get("problem"),
         )
         try:
-            hits = self.evidence_client.search(query)
+            try:
+                hits = self.evidence_client.search(query)
+            except Exception as exc:
+                # You.com can reject otherwise valid, highly specific queries with
+                # HTTP 422. Retry once with a smaller query that keeps only the
+                # product category and geography needed for competitor discovery.
+                if "422" not in str(exc):
+                    raise
+                fallback_query = bounded_query(
+                    state.get("product_type") or state.get("product_idea"),
+                    state.get("geography"),
+                    "competitors alternatives pricing",
+                    max_chars=200,
+                )
+                hits = self.evidence_client.search(fallback_query)
             evidence = []
             extracted_urls: set[str] = set()
             for hit in hits[:3]:

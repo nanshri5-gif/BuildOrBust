@@ -1129,6 +1129,53 @@ def test_competitor_research_uses_mcp_search_and_page_contents():
     assert completions.arguments["response_format"]["type"] == "json_schema"
 
 
+def test_competitor_research_retries_422_with_shorter_query():
+    class FakeEvidenceClient:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query):
+            self.queries.append(query)
+            if len(self.queries) == 1:
+                raise ResearchFailure("Failed to perform search. Error code: 422")
+            return [
+                SearchHit(
+                    title="Compliance platform",
+                    url="https://example.com/pricing",
+                    snippets=["Compliance software pricing"],
+                )
+            ]
+
+        def contents(self, url):
+            return "Pricing details"
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            report = FakeCompetitorResearcher().output[0]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=report.model_dump_json(), refusal=None
+                        )
+                    )
+                ]
+            )
+
+    evidence_client = FakeEvidenceClient()
+    YouMCPCompetitorResearcher(
+        evidence_client=evidence_client,
+        model_client=SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions())
+        ),
+        model="test-model",
+    ).research(complete_data().model_dump())
+
+    assert len(evidence_client.queries) == 2
+    assert len(evidence_client.queries[1]) <= 200
+    assert "competitors alternatives pricing" in evidence_client.queries[1]
+
+
 def test_you_contents_sends_urls_as_an_array():
     client = YouMCPClient(api_key="test-key")
     captured = {}
